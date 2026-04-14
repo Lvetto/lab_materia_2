@@ -3,13 +3,11 @@ import time
 import numpy as np
 import cv2
 
-
 class SCPIInstrument:
     """ Representation of a generic SCPI instrument communicating via PySerial. """
 
     commands = {
         "identify": "*IDN?",
-        "reset": "*RST",
         "reset": "*RST",
         "clear": "*CLS"
     }
@@ -62,7 +60,7 @@ class SCPIInstrument:
         """Ensure the serial connection is closed when the object is deleted."""
         self.close()
 
-class ElettrometroKeithley(SCPIInstrument):
+class KeithleyElectrometer(SCPIInstrument):
     """Implementation for the Keithley 6517A."""
 
     # specific SCPI commands for the Keithley 6517A
@@ -70,8 +68,11 @@ class ElettrometroKeithley(SCPIInstrument):
         "zero_check_on": "SYST:ZCH ON",
         "zero_check_off": "SYST:ZCH OFF",
         "configure_current": "CONF:CURR:DC",
-
-
+        "configure_voltage": "CONF:VOLT:DC",
+        "configure_resistance": "CONF:RES",
+        "configure_power": "CONF:POW",
+        "configure_all": "CONF:ALL",
+        "read": "READ?"
     }
     
     def __init__(self, port, baudrate=9600, timeout=2):
@@ -93,7 +94,7 @@ class ElettrometroKeithley(SCPIInstrument):
         self.send_command(self.commands["zero_check_off"])
         time.sleep(0.1) 
         
-        raw_value = self.query("READ?")
+        raw_value = self.query(self.commands["read"])
         
         self.send_command(self.commands["zero_check_on"])
         
@@ -104,8 +105,7 @@ class ElettrometroKeithley(SCPIInstrument):
         except (ValueError, IndexError):
             return raw_value  # Return the raw value for debugging if parsing fails
 
-
-class ProtocolloMaxtek:
+class MaxtekProtocol:
     """Base class to handle the Maxtek binary packet protocol."""
     
     # Fixed header for all packets as per the manual
@@ -158,7 +158,7 @@ class ProtocolloMaxtek:
     def __delete__(self, instance):
         self.close()
 
-class BilanciaMaxtek(ProtocolloMaxtek):
+class MaxtekScale(MaxtekProtocol):
     """Specific implementation for the Maxtek TM-350/400 scale."""
     
     # Manteniamo i comandi originali testati. Nota: sono già in formato bytes, quindi non serve convertirli ulteriormente.
@@ -204,8 +204,6 @@ class BilanciaMaxtek(ProtocolloMaxtek):
         self.send_raw(self.comandi_testati["stop"])
         self.reset_buffers()
         self.close()
-
-
 
 class Camera:
     def __init__(self, camera_index=0):
