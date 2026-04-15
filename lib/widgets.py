@@ -27,10 +27,12 @@ class BaseLabWidget(widgets.VBox):
         self.stop_btn  = widgets.Button(description="Stop")
         self.start_btn.on_click(self.start)
         self.stop_btn.on_click(self.stop)
+        self.exp_slider = widgets.IntSlider(value=-5, min=-13, max=-1, description='Exp')
+        self.wb_slider = widgets.IntSlider(value=3900, min=2800, max=6500, description='WB')
         self.plot_output = widgets.Output()
 
         self.layout = widgets.Layout(display='flex', flex_flow='column', align_items='center')
-        self.children = [widgets.HBox([self.start_btn, self.stop_btn]), self.plot_output]
+        self.children = [widgets.HBox([self.start_btn, self.stop_btn]), widgets.HBox([self.exp_slider, self.wb_slider]), self.plot_output]
 
         
         with self.plot_output:
