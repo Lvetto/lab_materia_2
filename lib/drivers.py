@@ -109,7 +109,7 @@ class MaxtekProtocol:
     """Base class to handle the Maxtek binary packet protocol."""
     
     # Fixed header for all packets as per the manual
-    SYNC = b'\xff\xfe' 
+    SYNC = b'\xff\xfe'
     
     def __init__(self, port, baudrate=9600, timeout=2):
         self.port = port
