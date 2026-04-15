@@ -56,8 +56,8 @@ class BaseLabWidget(widgets.VBox):
 
 class LabWidget(BaseLabWidget):
     
-    def __init__(self, camera_indx=0, bilancia_port="", acquire_hz=10, *args, **kwargs):
-        super().__init__(instruments=["camera", "bilancia"], acquire_hz=acquire_hz, *args, **kwargs)
+    def __init__(self, camera_indx=0, bilancia_port="", acquire_hz=10, render_hz=5, *args, **kwargs):
+        super().__init__(instruments=["camera", "bilancia"], acquire_hz=acquire_hz, render_hz=render_hz, *args, **kwargs)
 
         self.camera_indx = camera_indx
         self.bilancia_port = bilancia_port
