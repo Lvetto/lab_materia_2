@@ -121,6 +121,12 @@ class MaxtekProtocol:
     def reset_buffers(self):
         self.serial.reset_input_buffer()
         self.serial.reset_output_buffer()
+    
+    def reset_input_buffer(self):
+        self.serial.reset_input_buffer()
+    
+    def reset_output_buffer(self):
+        self.serial.reset_output_buffer()
 
     def _compute_checksum(self, length, msg_type, data_bytes):
         """
@@ -172,10 +178,29 @@ class MaxtekScale(MaxtekProtocol):
         super().__init__(port, baudrate, timeout)
 
     def identify(self):
+        self.reset_buffers()
         self.send_raw(self.comandi_testati["identificazione"])
         response = self.serial.read(60)
+        self.reset_buffers()
         return response.decode('ascii', errors='ignore').strip()
     
+    def read_single_measurement(self):
+        
+        self.reset_input_buffer()
+
+        self.start_measurements()
+        #self.send_raw(self.comandi_testati["iniziazione_misure"])
+
+        time.sleep(0.2)  # Breve pausa per dare tempo alla bilancia di rispondere
+
+        self.send_raw(self.comandi_testati["stop"])
+
+        response = self.read_measurement()
+
+        self.reset_output_buffer()
+
+        return response
+
     def start_measurements(self):
         self.send_raw(self.comandi_testati["iniziazione_misure"])
         self.serial.read(8)
@@ -187,7 +212,7 @@ class MaxtekScale(MaxtekProtocol):
         header = self.serial.read(5)
         if not header: # Se si pianta
             return None, None
-            
+
         rate_string = self.serial.read(5) 
         thickness_string = self.serial.read(6)    
         tail = self.serial.read(32)
@@ -197,7 +222,9 @@ class MaxtekScale(MaxtekProtocol):
             thickness = float(thickness_string.decode('ascii').replace(",", "."))
             return rate, thickness
         except ValueError:
-            return rate_string, thickness_string  # Return raw strings for debugging if parsing fails
+            rate_str = rate_string.decode('ascii', errors='ignore').strip()
+            thickness_str = thickness_string.decode('ascii', errors='ignore').strip()
+            return None#rate_str, thickness_str  # Return raw strings for debugging if parsing fails
     
     def stop_measurements(self):
         self.reset_buffers()
@@ -225,6 +252,8 @@ class Camera:
         if not ret:
             raise RuntimeError("Impossibile acquisire un frame dalla webcam.")
         
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else self.im0
+
         return frame
     
     def build_roi_masks(self, im0, center_x, center_y, radius):
@@ -255,7 +284,9 @@ class Camera:
             raise RuntimeError("Acquisizione immagine di riferimento fallita.")
             
         self.im0 = np.mean(frames, axis=0).astype(np.uint8)
-        self.im0 = cv2.cvtColor(self.im0, cv2.COLOR_BGR2GRAY)
+        # avg over the channels
+        self.im0 = cv2.cvtColor(self.im0, cv2.COLOR_BGR2GRAY) if len(self.im0.shape) == 3 else self.im0
+        #self.im0 = cv2.cvtColor(self.im0, cv2.COLOR_BGR2GRAY)
         
         return self.im0.astype(np.uint8)
 
