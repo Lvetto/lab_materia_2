@@ -3,6 +3,8 @@ from serial.tools import list_ports
 import time
 import threading
 from collections import deque
+import cv2
+import numpy as np
 
 class Bilancia:
     Header = bytes([255, 254])
@@ -245,3 +247,146 @@ class Bilancia:
         self.stop_continuous_read()
         if self.ser.is_open:
             self.ser.close()
+
+class Camera:
+    def __init__(self, camera_index=0, keep_frames=100):
+        self.cap = cv2.VideoCapture(camera_index)
+
+        self.im0 = None  # Immagine di riferimento
+        self.masks = None  # Maschere ROI
+        self.images = deque(maxlen=keep_frames)  # Buffer per le immagini acquisite
+        self.timestamps = deque(maxlen=keep_frames)  # Buffer per i timestamp delle acquisizioni
+
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        self.capturing = False
+
+        #self.set_camera_params()
+
+        if not self.cap.isOpened():
+            raise RuntimeError("Impossibile aprire la webcam.")
+    
+    def _build_roi_masks(self, im0, center_x, center_y, radius):
+        h, w = im0.shape[:2]
+        Y, X = np.ogrid[:h, :w]
+        dist_from_center = np.sqrt((X - center_x)**2 + (Y - center_y)**2)
+        
+        masks = {
+            'total': dist_from_center <= radius,
+            'mid': dist_from_center <= (radius / 2),
+            'in': dist_from_center <= (radius / 4),
+            'q1': (dist_from_center <= radius) & (Y < center_y) & (X > center_x),
+            'q2': (dist_from_center <= radius) & (Y < center_y) & (X < center_x),
+            'q3': (dist_from_center <= radius) & (Y > center_y) & (X < center_x),
+            'q4': (dist_from_center <= radius) & (Y > center_y) & (X > center_x)
+        }
+        
+        return masks
+    
+    def _acquire_reference_image(self, avgs=16):
+        frames = []
+        for _ in range(avgs):
+            frame = self.acquire_image()
+            frames.append(frame.astype(np.float32))
+            time.sleep(0.1) # Breve pausa per dare tempo al sensore
+            
+        if not frames:
+            raise RuntimeError("Acquisizione immagine di riferimento fallita.")
+            
+        self.im0 = np.mean(frames, axis=0).astype(np.uint8)
+        # avg over the channels
+        self.im0 = cv2.cvtColor(self.im0, cv2.COLOR_BGR2GRAY) if len(self.im0.shape) == 3 else self.im0
+        
+        return self.im0.astype(np.uint8)
+
+    def _process_frame(self, im0, masks):
+
+        if im0 is None or not masks:
+            raise ValueError("Immagine di riferimento e maschere ROI devono essere inizializzate prima di processare.")
+
+        frame = self.acquire_image()
+        im1_float = frame.astype(np.float32)
+        diff = im1_float - im0
+        heatmap = abs(diff)
+
+        ii = np.mean(255 - diff[masks['total']])
+        ii_in = np.mean(255 - diff[masks['in']])
+        ii_mid = np.mean(255 - diff[masks['mid']])
+        
+        ii1 = np.mean(255 - diff[masks['q1']])
+        ii2 = np.mean(255 - diff[masks['q2']])
+        ii3 = np.mean(255 - diff[masks['q3']])
+        ii4 = np.mean(255 - diff[masks['q4']])
+        
+        return frame, heatmap, ii, ii_in, ii_mid, ii1, ii2, ii3, ii4
+
+    def _continuous_acquisition(self, interval=0.1):
+        while self.capturing:
+            try:
+                frame, heatmap, ii, ii_in, ii_mid, ii1, ii2, ii3, ii4 = self._process_frame(self.im0, self.masks)
+                self.images.append((frame, heatmap, ii, ii_in, ii_mid, ii1, ii2, ii3, ii4))
+                self.timestamps.append(time.time())
+
+                if len(self.images) > self.images.maxlen:
+                    self.images.popleft()
+                    self.timestamps.popleft()
+
+            except Exception as e:
+                print(f"Errore durante l'acquisizione continua: {e}")
+                continue
+
+            time.sleep(interval)
+    
+    def start_acquisition(self, center_x, center_y, radius, interval=0.1):
+        if self.capturing:
+            print("Acquisizione già in corso.")
+            return
+        
+        self._acquire_reference_image()
+        self.masks = self._build_roi_masks(self.im0, center_x, center_y, radius)
+
+        self.capturing = True
+        self.acquisition_thread = threading.Thread(target=self._continuous_acquisition, args=(interval,))
+        self.acquisition_thread.daemon = True
+        self.acquisition_thread.start()
+    
+    def stop_acquisition(self):
+        self.capturing = False
+        if hasattr(self, 'acquisition_thread'):
+            self.acquisition_thread.join()
+
+    def set_camera_params(self, exposure=-5, wb_temp=3900):
+        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+        self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+        self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+        self.cap.set(cv2.CAP_PROP_WB_TEMPERATURE, wb_temp)
+    
+    def acquire_image(self):
+        ret, frame = self.cap.read()
+        
+        if not ret:
+            raise RuntimeError("Impossibile acquisire un frame dalla webcam.")
+        
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else self.im0
+
+        return frame
+
+    def get_latest_image(self):
+        if self.images:
+            return self.images.popleft(), self.timestamps.popleft()
+        else:
+            return None
+
+    def release(self):
+        self.cap.release()
+
+    def get_all_images(self):
+        images = list(self.images)
+        timestamps = list(self.timestamps)
+
+        self.images.clear()
+        self.timestamps.clear()
+
+        return images, timestamps
+
+
