@@ -133,7 +133,9 @@ class Bilancia:
 
         return split_message
 
-    def _continuous_read(self, sizes):
+    def _continuous_read(self, data):
+
+        sizes = [self.data_log_sizes[item] for item in data]
         size = sum(sizes)
 
         self.ser.reset_input_buffer()
@@ -151,10 +153,13 @@ class Bilancia:
                     
                 except (UnicodeDecodeError, ValueError) as e:
                     print("Disallineamento rilevato, ripristino il flusso...")
-                    self.ser.reset_input_buffer()
-                    time.sleep(0.1)
+                    self.send_command("Config data-logging", [])  # Resetta la configurazione di data-logging
+                    self.ser.reset_input_buffer()  # Pulisce il buffer per rimuovere eventuali dati corrotti
+                    self.ser.reset_output_buffer()  # Pulisce il buffer di output
+                    self.send_command("Config data-logging", data)  # Riattiva il data-logging con un comando semplice
+                    time.sleep(0.1)  # Aspetta un po' prima di riprovare
                     continue
-            
+           
             time.sleep(0.02)
 
     def get_latest_data(self):
@@ -229,10 +234,8 @@ class Bilancia:
         if self.read_thread is None or not self.read_thread.is_alive():
 
             self.send_command("Config data-logging", data)
-
-            sizes = [self.data_log_sizes[item] for item in data]
     
-            self.read_thread = threading.Thread(target=self._continuous_read, args=(sizes,))
+            self.read_thread = threading.Thread(target=self._continuous_read, args=(data,))
             self.read_thread.daemon = True
             self.reading = True
             self.read_thread.start()
