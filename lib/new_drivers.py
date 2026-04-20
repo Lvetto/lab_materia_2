@@ -133,6 +133,19 @@ class Bilancia:
 
         return split_message
 
+    def _handshake_data_logging(self, data):
+        self.send_command("Config data-logging", [])
+
+        time.sleep(0.1)
+
+        self.read_buffer.clear()
+        self.timestamps.clear()
+        self.ser.reset_input_buffer()
+
+        time.sleep(0.1)
+
+        self.send_command("Config data-logging", data)
+
     def _continuous_read(self, data):
 
         sizes = [self.data_log_sizes[item] for item in data]
@@ -153,11 +166,7 @@ class Bilancia:
                     
                 except (UnicodeDecodeError, ValueError) as e:
                     print("Disallineamento rilevato, ripristino il flusso...")
-                    self.send_command("Config data-logging", [])  # Resetta la configurazione di data-logging
-                    self.ser.reset_input_buffer()  # Pulisce il buffer per rimuovere eventuali dati corrotti
-                    self.ser.reset_output_buffer()  # Pulisce il buffer di output
-                    self.send_command("Config data-logging", data)  # Riattiva il data-logging con un comando semplice
-                    time.sleep(0.1)  # Aspetta un po' prima di riprovare
+                    self._handshake_data_logging(data)
                     continue
            
             time.sleep(0.02)
