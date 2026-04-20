@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import cv2
 
 import ipywidgets as widgets
-from lib.drivers import *
+from src.lib.drivers import *
 import threading
 
 class BaseLabWidget(widgets.VBox):
