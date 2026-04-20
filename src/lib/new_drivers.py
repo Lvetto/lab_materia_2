@@ -7,8 +7,14 @@ import cv2
 import numpy as np
 
 class Bilancia:
+    """
+    Rappresenta una microbilancia maxtek, implementando il protocollo di comunicazione seriale per inviare comandi e ricevere dati.
+    """
+
+    # Il protocollo prevede un messaggio con Header (2 byte), Address (1 byte), Instruction Code (1 byte), Data Length (1 byte), Data (variabile) e Checksum (1 byte).
     Header = bytes([255, 254])
 
+    # I comandi supportati e i loro codici di istruzione
     comandi = {
         "Remote activation" : bytes([0]),
         "Send monitor config" : bytes([1]),
@@ -18,12 +24,14 @@ class Bilancia:
         "Config data-logging" : bytes([5]),
     }
 
+    # I dati per il comando "Remote activation" e i loro codici
     remote_activation_data = {
     "start" : bytes([1]),
     "stop" : bytes([2]),
     "shutter" : bytes([4]),
     }
-      
+    
+    # I dati per il comando "Config data-logging" e la loro posizione nei byte di configurazione
     config_data_logging_data = [
     # byte 1
     ["Displayed rate", "Displayed thickness", "Displayed frequency", "Sensor 1 rate", "Sensor 1 thickness", "Sensor 1 frequency", "Sensor 2 rate", "Sensor 2 thickness"],
@@ -31,6 +39,7 @@ class Bilancia:
     ["Sensor 2 frequency", "Active sensor number"]
     ]
     
+    # dimensioni in byte dei dati loggati per ogni voce (per la decodifica)
     data_log_sizes = {
         "Displayed rate": 5,
         "Displayed thickness": 5,
@@ -45,15 +54,25 @@ class Bilancia:
     }
 
     def __init__(self, porta, baudrate=9600, dev_addr=1):
+        """
+        Inizializza la microbilancia.
 
-        # allow the init of dummy devices without a serial port
+        Args:
+            porta (str): La porta seriale a cui è connessa la microbilancia.
+            baudrate (int, optional): Il baudrate della comunicazione seriale. Defaults to 9600.
+            dev_addr (int, optional): L'indirizzo del dispositivo. Defaults to 1.
+        """
+
+        # permette di inizializzare un oggetto Bilancia senza una porta seriale, utile per testare la logica senza hardware
         if porta is not None:
             self.ser = serial.Serial(porta, baudrate, timeout=1)
         else:
             self.ser = None
 
+        # l'indirizzo del dispositivo, quasi sempre 1, ma è meglio renderlo configurabile
         self.dev_addr = bytes([dev_addr])
 
+        # thread e flag per la lettura continua dei dati
         self.read_thread = None
         self.reading = False
 
@@ -62,31 +81,69 @@ class Bilancia:
 
         self.lock = threading.Lock()
 
+        # buffer per i dati letti e i loro timestamp, usati nella lettura continua
         self.read_buffer = deque()
         self.timestamps = deque()
 
-        self.raw_read_buffer = deque()
-        self.raw_timestamps = deque()
+        # buffer per i dati grezzi letti dal seriale, prima della decodifica, e i loro timestamp
+        self._raw_read_buffer = deque()
+        self._raw_timestamps = deque()
 
     def _data_len(self, data):
+        """
+        Calcola la lunghezza dei dati. Usato nella costruzione del messaggio da inviare alla bilancia.
+
+        Args:
+            data (_type_): I dati per cui calcolare la lunghezza.
+
+        Returns:
+            bytes: La lunghezza dei dati in formato byte.
+        """
         return len(data).to_bytes(1, byteorder='little')
     
     def _checksum(self, instr_code, data):
+        """
+        Calcola il checksum per un messaggio, basato sul codice di istruzione e sui dati.
+        Il checksum è il complemento a 1 della somma di tutti i byte del messaggio (escluso l'Header), modulo 256.
+        
+        Args:
+            instr_code (bytes): Il codice di istruzione del messaggio.
+            data (bytes): I dati del messaggio.
+
+        Returns:
+            bytes: Il checksum calcolato in formato byte.
+
+        """
+
         lenght = self._data_len(data)
 
-        # 1s complement of the message payload
+        # il checksum è calcolato su instr_code + lenght + data, escludendo l'Header e l'indirizzo
         checksum = 255 - (sum(instr_code + lenght + data) % 256)
 
         return checksum.to_bytes(1, byteorder='little') 
     
     def _build_message(self, comando, data=None):
+        """
+        Costruisce un messaggio da inviare alla bilancia, basato sul comando e sui dati forniti.
 
+        Args:
+            comando (str): Il comando da inviare, deve essere una chiave presente in self.comandi.
+            data (varia, optional): I dati associati al comando, se richiesti. La forma e il contenuto dei dati dipendono dal comando specifico.
+        
+        Returns:
+            bytes: Il messaggio completo da inviare alla bilancia, in formato byte.
+        """
+
+        # ogni istruzione ha un codice specifico, che è definito in self.comandi. Se il comando non è riconosciuto, solleva un errore.
         instr_code = self.comandi[comando]
 
+        # alcuni comandi hanno argomenti specifici che devono essere codificati in un certo modo. Qui gestiamo la codifica dei dati in base al comando.
         if data is not None:
+            # remote activation ha un byte di dati che dipende dall'azione (start, stop, shutter)
             if comando == "Remote activation":
                 data_encoded = self.remote_activation_data[data]
             
+            # data-logging ha due byte di dati che rappresentano una configurazione di quali parametri loggare, codificati come bit in due byte
             elif comando == "Config data-logging":
 
                 byte1 = 0
@@ -105,12 +162,24 @@ class Bilancia:
             else:
                 raise ValueError("Comando non supportato o dati non validi")
         else:
+            # se il comando non richiede dati, usiamo un payload vuoto
             data_encoded = bytes()
         
+        # componiamo e restituiamo il messaggio completo, che include l'Header, l'indirizzo del dispositivo, il codice di istruzione, la lunghezza dei dati, i dati stessi e il checksum
         encoded_command = self.Header + self.dev_addr + instr_code + self._data_len(data_encoded) + data_encoded + self._checksum(instr_code, data_encoded)
         return encoded_command
     
     def _decode_message(self, message):
+        """
+        Decodifica un messaggio di risposta dalla bilancia, estraendo le informazioni chiave come l'indirizzo, il codice di istruzione, la lunghezza dei dati, i dati stessi e il checksum ricevuto.
+
+        Args:
+            message (bytes): Il messaggio di risposta da decodificare.
+
+        Returns:
+            dict: Un dizionario contenente le informazioni estratte dal messaggio.
+        """
+
         if len(message) < 8 or message[3] != 253:
             return None # Non è un messaggio di status valido
 
@@ -125,21 +194,37 @@ class Bilancia:
         }
     
     def _read_from_buffer(self, num_bytes):
+        """
+        Legge un certo numero di byte dal buffer seriale, se disponibili. Se non ci sono abbastanza byte disponibili, restituisce None.
+
+        Args:
+            num_bytes (int): Il numero di byte da leggere.
+
+        Returns:
+            bytes or None: I byte letti dal buffer seriale, o None se non ci sono abbastanza byte disponibili.
+        """
+
+        # leggiamo solo se ci sono abbastanza byte disponibili nel buffer seriale, altrimenti restituiamo None per indicare che non abbiamo dati completi da leggere
         if self.ser.in_waiting >= num_bytes:
             message = self.ser.read(num_bytes)
             return message
         return None
     
-        """rischio della funzione: 
-        se il PC è veloce e legge mentre la bilancia sta ancora finendo di inviare il pacchetto,
-        read_from_buffer restituirà None e salteremo quella misura. Se leggiamo il numero sbagliato
-        di byte, potremmo iniziare a leggere a metà di un messaggio, perdendo l'allineamento
-        con l'Header ([255, 254]).
-        """
-    
     def _decode_ascii_data(self, data, sizes):
+        """
+        Decodifica un messaggio di dati ASCII diviso in parti di dimensioni specificate, restituendo una lista di stringhe decodificate e pulite da spazi bianchi.
+
+        Args:
+            data (bytes): Il messaggio di dati ASCII da decodificare.
+            sizes (list of int): Una lista delle dimensioni per ogni parte del messaggio.
+
+        Returns:
+            list of str: Una lista di stringhe decodificate e pulite da spazi bianchi.
+        """
+
         split_message = []
 
+        # divide un messaggio di dati ASCII in base alle dimensioni specificate per ogni voce, decodifica ogni parte e la aggiunge alla lista dei risultati. Restituisce una lista di stringhe decodificate e pulite da spazi bianchi.
         idx = 0
         for size in sizes:
             split_message.append(data[idx:idx+size].decode('ascii').strip())
@@ -148,6 +233,13 @@ class Bilancia:
         return split_message
 
     def _handshake_data_logging(self, data):
+        """
+        Esegue un handshake per la configurazione del data-logging, inviando prima un comando di configurazione vuoto per resettare eventuali configurazioni precedenti, pulendo il buffer di lettura e poi inviando il comando con i dati desiderati.
+
+        Args:
+            data (list of str): I dati per la configurazione del data-logging.
+        """
+
         self.send_command("Config data-logging", [])
 
         time.sleep(0.1)
@@ -160,24 +252,37 @@ class Bilancia:
 
         self.send_command("Config data-logging", data)
 
-    def _continuous_read(self, data):
+    def _continuous_read(self, data, interval=0.01):
+        """
+        Legge continuamente i dati dal buffer seriale, separando i byte e associando un timestamp a ciascuno, e li aggiunge a un buffer interno di lettura.
+        Questo metodo viene eseguito in un thread separato per permettere la lettura continua senza bloccare il thread principale.
 
-        #sizes = [self.data_log_sizes[item] for item in data]
-        #size = sum(sizes)
+        Args:
+            data (list of str): I dati per la configurazione del data-logging, usati per eseguire l'handshake iniziale e assicurarsi che la bilancia stia inviando i dati desiderati.
+            interval (float, optional): L'intervallo di tempo tra ogni lettura. Defaults to 0.01.
+        """
 
-        self.ser.reset_input_buffer()
-
+        # leggiamo l'intero buffer setiale e lo aggiungiamo al buffer interno di lettura, con il timestamp associato
         while self.reading:
-            val = self.ser.read_all() # Legge tutto ciò che è disponibile nel buffer seriale
+            val = self.ser.read_all()
             if val:
                 with self.lock:
-                    # add each byte to the raw_read_buffer
+                    # separiamo i byte
                     for byte in val:
-                        self.raw_read_buffer.append(byte)
-                        self.raw_timestamps.append(time.time())
-            time.sleep(0.01)
+                        self._raw_read_buffer.append(byte)
+                        self._raw_timestamps.append(time.time())
+            
+            time.sleep(interval)
 
     def _dummy_continuous_read(self, data, chunk_size=16, iterations=100):
+        """
+        Simula la lettura continua di dati, prendendo chunk di dati da una lista predefinita e aggiungendoli al buffer interno di lettura con un timestamp associato, per testare la logica di decodifica senza hardware reale.
+
+        Args:
+            data (list of bytes): I dati da simulare.
+            chunk_size (int, optional): La dimensione di ciascun chunk di dati. Defaults to 16.
+            iterations (int, optional): Il numero di iterazioni da eseguire. Defaults to 100.
+        """
         i = 0
         while self.reading and i < iterations * chunk_size:
             val = data[i:i+chunk_size]  # Simula la lettura di chunk di dati
@@ -185,43 +290,55 @@ class Bilancia:
             with self.lock:
                 if val:
                     for byte in val:
-                        self.raw_read_buffer.append(byte)
-                        self.raw_timestamps.append(time.time())
+                        self._raw_read_buffer.append(byte)
+                        self._raw_timestamps.append(time.time())
             time.sleep(0.01)
     
     def _decode_raw_buffer(self, sizes):
-        while len(self.raw_read_buffer) >= sum(sizes) + 2 + 3 + 1: # Header (2) + address+instr_code+data_length (3) + data + checksum (1)
+        """
+        Decodifica i dati grezzi letti dal buffer seriale, cercando l'Header, estraendo i byte di indirizzo, codice di istruzione, lunghezza dei dati e i dati stessi, decodificando i dati in stringhe ASCII e aggiungendoli al buffer di lettura decodificato con il timestamp associato.
+
+        Args:
+            sizes (list of int): Le dimensioni dei chunk di dati da decodificare.
+        """
+        while len(self._raw_read_buffer) >= sum(sizes) + 2 + 3 + 1: # Header (2) + address+instr_code+data_length (3) + data + checksum (1)
 
             # Controlla se i primi 2 byte sono l'Header
-            if self.raw_read_buffer[0] == 255 and self.raw_read_buffer[1] == 254:
+            if self._raw_read_buffer[0] == 255 and self._raw_read_buffer[1] == 254:
                 # Rimuovi l'Header e i loro timestamp
-                self.raw_read_buffer.popleft()  # Rimuove 255
-                self.raw_read_buffer.popleft()  # Rimuove 254
+                self._raw_read_buffer.popleft()  # Rimuove 255
+                self._raw_read_buffer.popleft()  # Rimuove 254
 
-                self.raw_timestamps.popleft()  # Rimuove timestamp di 255
-                self.raw_timestamps.popleft()  # Rimuove timestamp di 254
+                self._raw_timestamps.popleft()  # Rimuove timestamp di 255
+                self._raw_timestamps.popleft()  # Rimuove timestamp di 254
 
                 # Rimuovi i byte di indirizzo, instr_code e data_length +  i timestamp associati (3 byte)
                 for _ in range(3):
-                    self.raw_read_buffer.popleft()
-                    self.raw_timestamps.popleft()
+                    self._raw_read_buffer.popleft()
+                    self._raw_timestamps.popleft()
 
                 # Ora estrai i dati basati sui sizes specificati
                 data_bytes = []
                 for size in sizes:
-                    chunk = bytes([self.raw_read_buffer.popleft() for _ in range(size)])
+                    chunk = bytes([self._raw_read_buffer.popleft() for _ in range(size)])
                     data_bytes.append(chunk)
 
                 # Decodifica i dati e aggiungili al buffer di lettura
                 decoded_data = [chunk.decode('ascii').strip() for chunk in data_bytes]
                 self.read_buffer.append(decoded_data)
-                self.timestamps.append(self.raw_timestamps.popleft())
+                self.timestamps.append(self._raw_timestamps.popleft())
             else:
                 # Se non trovi l'Header, rimuovi il primo byte e continua a cercare
-                self.raw_read_buffer.popleft()
-                self.raw_timestamps.popleft()
+                self._raw_read_buffer.popleft()
+                self._raw_timestamps.popleft()
 
     def _decode_thread(self, sizes):
+        """
+        Esegue la decodifica dei dati grezzi in un thread separato, chiamando continuamente il metodo _decode_raw_buffer per processare i dati letti dal buffer seriale.
+
+        Args:
+            sizes (list of int): Le dimensioni dei chunk di dati da decodificare.
+        """
         while self.decoding:
             with self.lock:
                 self._decode_raw_buffer(sizes)
