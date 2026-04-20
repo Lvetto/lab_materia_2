@@ -36,10 +36,7 @@ Di seguito è presentata la struttura delle cartelle del progetto e il loro cont
 
 ## Cose da fare
 
-- Riorganizzare il codice in `src` in un pacchetto Python ben strutturato, con moduli e classi per la gestione degli strumenti, l'analisi dei dati e l'automazione degli esperimenti.
-- Documentare il codice con docstring e commenti per facilitare la comprensione e la manutenzione futura. Vorrei usare pdocs per generare una documentazione HTML a partire dalle docstring, in modo da avere una risorsa facilmente consultabile per chiunque voglia capire o contribuire al codice.
-- Popolare le cartelle `data` e `docs` con i dati raccolti e le risorse utili per il corso, mantenendo una buona organizzazione e chiarezza.
+- Finire di documentare il codice aggiungendo i docstring. Seguite la struttura nella bilancia, che vorrei usare pdoc per generare la documentazione in modo automatico.
+- Caricare tutto quello che abbiamo in docs
 - La camera ha bisogno di un po' di lavoro sulle roi.
 - Le interfacce devono essere riordinate, probabilmente creando una classe base per le finestre che usiamo.
-- Un po' meno ai nel readme...
-
