@@ -229,7 +229,8 @@ class Bilancia:
 
     def get_latest_data(self):
         if self.read_buffer:
-            return self.read_buffer.popleft(), self.timestamps.popleft()
+            with self.lock:
+                return self.read_buffer.popleft(), self.timestamps.popleft()
         else:
             return None
 
