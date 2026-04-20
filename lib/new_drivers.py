@@ -45,14 +45,28 @@ class Bilancia:
     }
 
     def __init__(self, porta, baudrate=9600, dev_addr=1):
-        self.ser = serial.Serial(porta, baudrate, timeout=1)
+
+        # allow the init of dummy devices without a serial port
+        if porta is not None:
+            self.ser = serial.Serial(porta, baudrate, timeout=1)
+        else:
+            self.ser = None
+
         self.dev_addr = bytes([dev_addr])
 
         self.read_thread = None
         self.reading = False
 
+        self.decode_thread = None
+        self.decoding = False
+
+        self.lock = threading.Lock()
+
         self.read_buffer = deque()
         self.timestamps = deque()
+
+        self.raw_read_buffer = deque()
+        self.raw_timestamps = deque()
 
     def _data_len(self, data):
         return len(data).to_bytes(1, byteorder='little')
@@ -154,22 +168,64 @@ class Bilancia:
         self.ser.reset_input_buffer()
 
         while self.reading:
-            val = self._read_from_buffer(size)
+            val = self.ser.read_all() # Legge tutto ciò che è disponibile nel buffer seriale
             if val:
-                try:
-                    decoded_val = self._decode_ascii_data(val, sizes)
+                with self.lock:
+                    # add each byte to the raw_read_buffer
+                    for byte in val:
+                        self.raw_read_buffer.append(byte)
+                        self.raw_timestamps.append(time.time())
+            time.sleep(0.01)
 
-                    decoded_val = [float(x) if x.replace('.','',1).isdigit() else x for x in decoded_val]
-                                        
-                    self.read_buffer.append(decoded_val)
-                    self.timestamps.append(time.time())
-                    
-                except (UnicodeDecodeError, ValueError) as e:
-                    print("Disallineamento rilevato, ripristino il flusso...")
-                    self._handshake_data_logging(data)
-                    continue
-           
-            time.sleep(0.02)
+    def _dummy_continuous_read(self, data, chunk_size=16, iterations=100):
+        i = 0
+        while self.reading and i < iterations * chunk_size:
+            val = data[i:i+chunk_size]  # Simula la lettura di chunk di dati
+            i = (i + chunk_size) % len(data)  # Loop attraverso i dati
+            with self.lock:
+                if val:
+                    for byte in val:
+                        self.raw_read_buffer.append(byte)
+                        self.raw_timestamps.append(time.time())
+            time.sleep(0.01)
+    
+    def _decode_raw_buffer(self, sizes):
+        while len(self.raw_read_buffer) >= sum(sizes):
+
+            # Controlla se i primi 2 byte sono l'Header
+            if self.raw_read_buffer[0] == 255 and self.raw_read_buffer[1] == 254:
+                # Rimuovi l'Header e i loro timestamp
+                self.raw_read_buffer.popleft()  # Rimuove 255
+                self.raw_read_buffer.popleft()  # Rimuove 254
+
+                self.raw_timestamps.popleft()  # Rimuove timestamp di 255
+                self.raw_timestamps.popleft()  # Rimuove timestamp di 254
+
+                # Rimuovi i byte di indirizzo, instr_code e data_length +  i timestamp associati (3 byte)
+                for _ in range(3):
+                    self.raw_read_buffer.popleft()
+                    self.raw_timestamps.popleft()
+
+                # Ora estrai i dati basati sui sizes specificati
+                data_bytes = []
+                for size in sizes:
+                    chunk = bytes([self.raw_read_buffer.popleft() for _ in range(size)])
+                    data_bytes.append(chunk)
+
+                # Decodifica i dati e aggiungili al buffer di lettura
+                decoded_data = [chunk.decode('ascii').strip() for chunk in data_bytes]
+                self.read_buffer.append(decoded_data)
+                self.timestamps.append(self.raw_timestamps.popleft())
+            else:
+                # Se non trovi l'Header, rimuovi il primo byte e continua a cercare
+                self.raw_read_buffer.popleft()
+                self.raw_timestamps.popleft()
+
+    def _decode_thread(self, sizes):
+        while self.decoding:
+            with self.lock:
+                self._decode_raw_buffer(sizes)
+            time.sleep(0.05)
 
     def get_latest_data(self):
         if self.read_buffer:
@@ -187,6 +243,10 @@ class Bilancia:
         return data, timestamps
 
     def send_command(self, comando, data=None):
+        if self.ser is None:
+            print("Comando inviato a dispositivo dummy:", comando, data)
+            return
+        
         self.ser.reset_input_buffer()
         message = self._build_message(comando, data)
         self.ser.write(message)
@@ -198,9 +258,59 @@ class Bilancia:
         else:
             print("Errore: Risposta non ricevuta o parziale dal dispositivo.")
             return None
+ 
+    def start_continuous_read(self, data=["Displayed rate", "Displayed thickness"]):
+        if self.read_thread is None or not self.read_thread.is_alive():
+
+            self.send_command("Config data-logging", data)
     
-    # proposta altra funzione per leggere
+            self.read_thread = threading.Thread(target=self._continuous_read, args=(data,))
+            self.read_thread.daemon = True
+            self.reading = True
+            self.read_thread.start()
+
+        if self.decode_thread is None or not self.decode_thread.is_alive():
+            sizes = [self.data_log_sizes[item] for item in data]
+            self.decode_thread = threading.Thread(target=self._decode_thread, args=(sizes,))
+            self.decode_thread.daemon = True
+            self.decoding = True
+            self.decode_thread.start()
     
+    def dummy_start_continuous_read(self, data, data_name=["Displayed rate", "Displayed thickness"], chunk_size=16, iterations=100):
+        if self.read_thread is None or not self.read_thread.is_alive():
+            
+            self.send_command("Config data-logging", data_name)
+
+            self.read_thread = threading.Thread(target=self._dummy_continuous_read, args=(data, chunk_size, iterations))
+            self.read_thread.daemon = True
+            self.reading = True
+            self.read_thread.start()
+
+        if self.decode_thread is None or not self.decode_thread.is_alive():
+            sizes = [self.data_log_sizes[item] for item in data_name]
+            self.decode_thread = threading.Thread(target=self._decode_thread, args=(sizes,))
+            self.decode_thread.daemon = True
+            self.decoding = True
+            self.decode_thread.start()
+    
+    def stop_continuous_read(self):
+        self.reading = False
+        self.send_command("Config data-logging", [])
+        if self.read_thread is not None:
+            self.read_thread.join()
+        self.decoding = False
+        if self.decode_thread is not None:
+            self.decode_thread.join()
+
+    def close(self):
+        self.stop_continuous_read()
+        if self.ser.is_open:
+            self.ser.close()
+
+class Bilancia2(Bilancia):
+    def __init__(self, porta, baudrate=9600, dev_addr=1):
+        super().__init__(porta, baudrate, dev_addr)
+        
     def get_safe_reading(self):
         # cerco l'Header [255, 254]
         while True:
@@ -238,27 +348,7 @@ class Bilancia:
         except Exception as e:
             print(f"Errore nella decodifica ASCII: {e}")
             return None
-    
-    def start_continuous_read(self, data=["Displayed rate", "Displayed thickness"]):
-        if self.read_thread is None or not self.read_thread.is_alive():
-
-            self.send_command("Config data-logging", data)
-    
-            self.read_thread = threading.Thread(target=self._continuous_read, args=(data,))
-            self.read_thread.daemon = True
-            self.reading = True
-            self.read_thread.start()
-    
-    def stop_continuous_read(self):
-        self.reading = False
-        self.send_command("Config data-logging", [])
-        if self.read_thread is not None:
-            self.read_thread.join()
-
-    def close(self):
-        self.stop_continuous_read()
-        if self.ser.is_open:
-            self.ser.close()
+   
 
 class Camera:
     def __init__(self, camera_index=0, keep_frames=100):
