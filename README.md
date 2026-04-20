@@ -1,26 +1,25 @@
 # Laboratorio di Fisica della Materia 2
 
-## Panoramica
-Questo repository ospita il progetto relativo al laboratorio di fisica della materia. Contiene il codice per l'acquisizione, l'analisi dei dati e la documentazione associata agli esperimenti svolti.
+Questa repo contiene tutte le risorse, i dati e il codice relativi al laboratorio di Fisica della Materia 2. 
 
 ## Struttura repository
-.
-├── data/
-├── docs/
-├── interfaces/
-├── src/
-├── temp/
-└── README.md
+
+├── data/\\
+├── docs/\\
+├── interfaces/\\
+├── src/\\
+├── temp/\\
+└── README.md\\
 
 ## Descrizione cartelle
-- **data**: contiene i dataset e i dati grezzi raccolti durante le sessioni sperimentali.
-- **docs**: raccoglie informazioni, note di laboratorio e documentazione tecnica (presente e futura).
+- **data**: contiene tutti i dati raccolti.
+- - **data/raw**: dati grezzi, direttamente dagli strumenti.
+- - **data/processed**: dati elaborati, pronti per l'analisi.
+- **docs**: contiene la documentazione e tutte le risorse raccolte durante il corso, come appunti, manuali e riferimenti bibliografici.
+- - **notes**: appunti e note di laboratorio.
+- - **references**: manuali, codice e risorse esterne utili per il corso.
+- - **paper**: articoli scientifici e pubblicazioni rilevanti per il corso.
 - **interfaces**: include le interfacce software sviluppate per la comunicazione con gli strumenti e la gestione degli esperimenti.
 - **src**: contiene il codice sorgente, organizzato (o in fase di riorganizzazione) come pacchetto Python per l'analisi e l'automazione.
 - **temp**: destinata a file temporanei, script di prova e materiale in corso di lavorazione.
 
-## Come orientarsi rapidamente
-- Per l'analisi dei dati, consultare la directory `src`.
-- Per le specifiche degli strumenti, fare riferimento a `interfaces`.
-- I risultati delle misure si trovano in `data`.
-- La documentazione di supporto è disponibile in `docs`.
