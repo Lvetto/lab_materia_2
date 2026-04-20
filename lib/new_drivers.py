@@ -162,8 +162,8 @@ class Bilancia:
 
     def _continuous_read(self, data):
 
-        sizes = [self.data_log_sizes[item] for item in data]
-        size = sum(sizes)
+        #sizes = [self.data_log_sizes[item] for item in data]
+        #size = sum(sizes)
 
         self.ser.reset_input_buffer()
 
@@ -190,7 +190,7 @@ class Bilancia:
             time.sleep(0.01)
     
     def _decode_raw_buffer(self, sizes):
-        while len(self.raw_read_buffer) >= sum(sizes):
+        while len(self.raw_read_buffer) >= sum(sizes) + 2 + 3 + 1: # Header (2) + address+instr_code+data_length (3) + data + checksum (1)
 
             # Controlla se i primi 2 byte sono l'Header
             if self.raw_read_buffer[0] == 255 and self.raw_read_buffer[1] == 254:
