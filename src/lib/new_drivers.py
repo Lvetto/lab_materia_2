@@ -345,13 +345,28 @@ class Bilancia:
             time.sleep(0.05)
 
     def get_latest_data(self):
-        if self.read_buffer:
+        """
+        Legge l'ultimo dato decodificato dal buffer di lettura, restituendo sia il dato
+        che il timestamp associato. Se non ci sono dati disponibili, restituisce None.
+        
+        Returns:
+            tuple or None: Una tupla contenente il dato decodificato e il suo timestamp, o None se non ci sono dati disponibili.
+        """
+        
+        if self.read_buffer: 
             with self.lock:
                 return self.read_buffer.popleft(), self.timestamps.popleft()
         else:
             return None
 
     def get_data(self):
+        """
+        Legge dal buffer una lista di dati e timestamps per poi svuotarli
+
+        Returns:
+            lista di float (?): rate, spessore e timestamp associato
+        """
+        
         data = list(self.read_buffer)
         timestamps = list(self.timestamps)
 
@@ -481,7 +496,7 @@ class Camera:
         
         self.capturing = False
         
-        self.set_camera_params(self, exposure=-5, wb_temp=3900)
+        self.set_camera_params(exposure=-5, wb_temp=3900)
 
         if not self.cap.isOpened():
             raise RuntimeError("Impossibile aprire la webcam.")
@@ -502,6 +517,13 @@ class Camera:
         }
         
         return masks
+    
+    def update_roi(self, center_x, center_y, radius):
+        """
+        Aggiorna le maschere ROI dinamicamente durante l'acquisizione.
+        """
+        if self.im0 is not None:
+            self.masks = self._build_roi_masks(self.im0, center_x, center_y, radius)
     
     def acquire_image(self):
         ret, frame = self.cap.read() 
