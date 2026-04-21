@@ -469,7 +469,7 @@ class Bilancia2(Bilancia):
    
 
 class Camera:
-    def __init__(self, camera_index=0, keep_frames=100):
+    def __init__(self, camera_index=0, keep_frames=100): 
         self.cap = cv2.VideoCapture(camera_index)
 
         self.im0 = None  # Immagine di riferimento
@@ -477,11 +477,11 @@ class Camera:
         self.images = deque(maxlen=keep_frames)  # Buffer per le immagini acquisite
         self.timestamps = deque(maxlen=keep_frames)  # Buffer per i timestamp delle acquisizioni
 
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1) 
         
         self.capturing = False
-
-        #self.set_camera_params()
+        
+        self.set_camera_params(self, exposure=-5, wb_temp=3900)
 
         if not self.cap.isOpened():
             raise RuntimeError("Impossibile aprire la webcam.")
@@ -503,6 +503,17 @@ class Camera:
         
         return masks
     
+    def acquire_image(self):
+        ret, frame = self.cap.read() 
+        #ret è un valore booleano, indica se la cattura è andata a buon fine (vale True)
+        
+        if not ret:
+            raise RuntimeError("Impossibile acquisire un frame dalla webcam.")
+        
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else self.im0
+
+        return frame
+    
     def _acquire_reference_image(self, avgs=16):
         frames = []
         for _ in range(avgs):
@@ -512,8 +523,12 @@ class Camera:
             
         if not frames:
             raise RuntimeError("Acquisizione immagine di riferimento fallita.")
-            
+        
+        # frames è una lista di 16 immagini 2D 
+           
         self.im0 = np.mean(frames, axis=0).astype(np.uint8)
+        # scegliendo axis=0 per fissato pixel in ogni frame, prendo la media di quel pixel su tutti i frame
+        
         # avg over the channels
         self.im0 = cv2.cvtColor(self.im0, cv2.COLOR_BGR2GRAY) if len(self.im0.shape) == 3 else self.im0
         
@@ -526,7 +541,7 @@ class Camera:
 
         frame = self.acquire_image()
         im1_float = frame.astype(np.float32)
-        diff = im1_float - im0
+        diff = im1_float - im0 # qui im0 è l'immagine di riferimento mediata su 16 frames
         heatmap = abs(diff)
 
         ii = np.mean(255 - diff[masks['total']])
@@ -576,20 +591,14 @@ class Camera:
             self.acquisition_thread.join()
 
     def set_camera_params(self, exposure=-5, wb_temp=3900):
+        
+        # disabilita esposizione automatica e bilancamento del bianco automatico 
         self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
         self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
         self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
         self.cap.set(cv2.CAP_PROP_WB_TEMPERATURE, wb_temp)
     
-    def acquire_image(self):
-        ret, frame = self.cap.read()
-        
-        if not ret:
-            raise RuntimeError("Impossibile acquisire un frame dalla webcam.")
-        
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else self.im0
-
-        return frame
+    
 
     def get_latest_image(self):
         if self.images:

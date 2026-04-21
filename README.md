@@ -37,6 +37,6 @@ Di seguito è presentata la struttura delle cartelle del progetto e il loro cont
 ## Cose da fare
 
 - Finire di documentare il codice aggiungendo i docstring. Seguite la struttura nella bilancia, che vorrei usare pdoc per generare la documentazione in modo automatico.
-- Caricare tutto quello che abbiamo in docs
+- Caricare tutto quello che abbiamo in docs (aggiunti i paper inviati dalla Prof)
 - La camera ha bisogno di un po' di lavoro sulle roi.
 - Le interfacce devono essere riordinate, probabilmente creando una classe base per le finestre che usiamo.
