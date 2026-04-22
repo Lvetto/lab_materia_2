@@ -562,26 +562,16 @@ class Camera:
             raise ValueError("Immagine di riferimento e maschere ROI devono essere inizializzate prima di processare.")
 
         frame = self.acquire_image()
-        im1_float = frame.astype(np.float32)
-        diff = im1_float - im0 # qui im0 è l'immagine di riferimento mediata su 16 frames
-        heatmap = abs(diff)
-
-        ii = np.mean(255 - diff[masks['total']])
-        ii_in = np.mean(255 - diff[masks['in']])
-        ii_mid = np.mean(255 - diff[masks['mid']])
         
-        ii1 = np.mean(255 - diff[masks['q1']])
-        ii2 = np.mean(255 - diff[masks['q2']])
-        ii3 = np.mean(255 - diff[masks['q3']])
-        ii4 = np.mean(255 - diff[masks['q4']])
+        roi = frame * masks['total']
         
-        return frame, heatmap, ii, ii_in, ii_mid, ii1, ii2, ii3, ii4
+        return frame, roi
 
     def _continuous_acquisition(self, interval=0.1):
         while self.capturing:
             try:
-                frame, heatmap, ii, ii_in, ii_mid, ii1, ii2, ii3, ii4 = self._process_frame(self.im0, self.masks)
-                self.images.append((frame, heatmap, ii, ii_in, ii_mid, ii1, ii2, ii3, ii4))
+                frame, roi = self._process_frame(self.im0, self.masks)
+                self.images.append((frame, roi))
                 self.timestamps.append(time.time())
 
                 if len(self.images) > self.images.maxlen:
@@ -620,8 +610,6 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
         self.cap.set(cv2.CAP_PROP_WB_TEMPERATURE, wb_temp)
     
-    
-
     def get_latest_image(self):
         if self.images:
             return self.images.popleft(), self.timestamps.popleft()
