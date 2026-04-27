@@ -545,7 +545,6 @@ class Camera:
         print(f"Stato attuale: {locked}")
         return locked
 
-
     def _build_roi_masks(self, im0, center_x, center_y, radius):
         h, w = im0.shape[:2]
         Y, X = np.ogrid[:h, :w]
