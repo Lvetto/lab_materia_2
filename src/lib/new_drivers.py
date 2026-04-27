@@ -5,6 +5,7 @@ import threading
 from collections import deque
 import cv2
 import numpy as np
+import platform
 
 class Bilancia:
     """
@@ -485,22 +486,66 @@ class Bilancia2(Bilancia):
 
 class Camera:
     def __init__(self, camera_index=0, keep_frames=100): 
-        self.cap = cv2.VideoCapture(camera_index)
+            if platform.system() == 'Windows':
+                self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW) # DirectShow
+            elif platform.system() == 'Linux':
+                self.cap = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)  # Video4Linux2
+            else:
+                self.cap = cv2.VideoCapture(camera_index)
 
-        self.im0 = None  # Immagine di riferimento
-        self.masks = None  # Maschere ROI
-        self.images = deque(maxlen=keep_frames)  # Buffer per le immagini acquisite
-        self.timestamps = deque(maxlen=keep_frames)  # Buffer per i timestamp delle acquisizioni
+            self.im0 = None  
+            self.masks = None  
+            self.images = deque(maxlen=keep_frames)  
+            self.timestamps = deque(maxlen=keep_frames)  
 
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1) 
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1) 
+            self.capturing = False
+
+            if not self.cap.isOpened():
+                raise RuntimeError("Impossibile aprire la webcam.")
+
+            self.lock_camera_after_auto()
+
+    def set_auto_exposure(self, enabled: bool):
+        """Imposta l'auto esposizione in base all'OS"""
+        sys_os = platform.system()
         
-        self.capturing = False
-        
-        self.set_camera_params(exposure=-5, wb_temp=3900)
+        if sys_os == 'Windows':
+            # In DirectShow: -8 o 1 per Auto, 0 o -1 per Manuale (dipende dalla cam)
+            val = -8 if enabled else 0
+            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, val)
+        elif sys_os == 'Linux':
+            # In V4L2: 3 è Auto, 1 è Manuale
+            val = 3 if enabled else 1
+            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, val)
 
-        if not self.cap.isOpened():
-            raise RuntimeError("Impossibile aprire la webcam.")
-    
+    def lock_camera_after_auto(self, warmup_sec=3.0):
+        # Attiva l'auto per far regolare la telecamera
+        self.set_auto_exposure(True)
+        self.cap.set(cv2.CAP_PROP_AUTO_WB, 1)
+        self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+
+        print("Riscaldamento fotocamera (Auto mode)...")
+        t0 = time.time()
+        while time.time() - t0 < warmup_sec:
+            ret, _ = self.cap.read()
+            if not ret:
+                break
+            cv2.waitKey(10) # Da tempo al buffer di svuotarsi
+
+        print("Blocco dei parametri...")
+        self.set_auto_exposure(False)
+        self.cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+        self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+
+        locked = {
+            "exposure": self.cap.get(cv2.CAP_PROP_EXPOSURE),
+            "auto_exposure": self.cap.get(cv2.CAP_PROP_AUTO_EXPOSURE),
+        }
+        print(f"Stato attuale: {locked}")
+        return locked
+
+
     def _build_roi_masks(self, im0, center_x, center_y, radius):
         h, w = im0.shape[:2]
         Y, X = np.ogrid[:h, :w]
