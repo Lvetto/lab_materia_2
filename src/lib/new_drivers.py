@@ -520,7 +520,15 @@ class Camera:
             self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, val)
 
     def lock_camera_after_auto(self, warmup_sec=3.0):
-        # Attiva l'auto per far regolare la telecamera
+        """Attiva l'auto mode per far regolare la telecamera
+
+        Args:
+            warmup_sec (float, optional): tempo necessario per il riscaldamento della camera. Defaults a 3.0.
+
+        Returns:
+            _type_: dizionario con i parametri acquisiti e fissati dopo il riscaldamento
+        """
+        
         self.set_auto_exposure(True)
         self.cap.set(cv2.CAP_PROP_AUTO_WB, 1)
         self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
@@ -529,6 +537,9 @@ class Camera:
         t0 = time.time()
         while time.time() - t0 < warmup_sec:
             ret, _ = self.cap.read()
+            # ret è un valore booleano, indica se la cattura è andata a buon fine (vale True)
+            # frame è l'immagine catturata sotto forma di matrice NumPy
+            # la funzione read() restituisce la tupla (ret, frame)
             if not ret:
                 break
             cv2.waitKey(10) # Da tempo al buffer di svuotarsi
@@ -546,9 +557,20 @@ class Camera:
         return locked
 
     def _build_roi_masks(self, im0, center_x, center_y, radius):
+        """ costruisce i limiti della roi
+
+        Args:
+            im0 (_type_): reference_image
+            center_x (_type_): ascissa del centro della roi
+            center_y (_type_): ordinata del centro della roi
+            radius (_type_): raggio della roi
+
+        Returns:
+            _type_: dizionario con le maschere per ogni regione di interesse (total, mid, in, q1, q2, q3, q4)
+        """
         h, w = im0.shape[:2]
-        Y, X = np.ogrid[:h, :w]
-        dist_from_center = np.sqrt((X - center_x)**2 + (Y - center_y)**2)
+        Y, X = np.ogrid[:h, :w] #Y è una colonna che contiene tutti gli indici di riga, X è una riga che contiene tutti gli indici di colonna
+        dist_from_center = np.sqrt((X - center_x)**2 + (Y - center_y)**2) # non è un numero, ma una matrice della stessa dimensione della reference_image pari a h x w
         
         masks = {
             'total': dist_from_center <= radius,
@@ -570,17 +592,31 @@ class Camera:
             self.masks = self._build_roi_masks(self.im0, center_x, center_y, radius)
     
     def acquire_image(self):
+        """ 
+        Raises:
+            RuntimeError: è meglio far crashare il programma qui con un messaggio chiaro piuttosto che tentare di elaborare un'immagine "vuota" (None)
+
+        Returns:
+            _type_: immagine di pixels in scala di grigi
+        """
         ret, frame = self.cap.read() 
-        #ret è un valore booleano, indica se la cattura è andata a buon fine (vale True)
         
         if not ret:
             raise RuntimeError("Impossibile acquisire un frame dalla webcam.")
         
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else self.im0
+        # if len(frame.shape) == 3 controlla se l'immagine ha 3 canali di colore
 
         return frame
     
     def _acquire_reference_image(self, avgs=16):
+        """
+        Args:
+            avgs (int, optional): numero di frames su cui mediare. Defaults to 16.
+
+        Returns:
+            _type_: reference_image in scala di grigi ottenuta facendo la media su 16 frames
+        """
         frames = []
         for _ in range(avgs):
             frame = self.acquire_image()
@@ -593,7 +629,7 @@ class Camera:
         # frames è una lista di 16 immagini 2D 
            
         self.im0 = np.mean(frames, axis=0).astype(np.uint8)
-        # scegliendo axis=0 per fissato pixel in ogni frame, prendo la media di quel pixel su tutti i frame
+        # scegliendo axis=0 faccio la media su tutte le immagini, pixel per pixel
         
         # avg over the channels
         self.im0 = cv2.cvtColor(self.im0, cv2.COLOR_BGR2GRAY) if len(self.im0.shape) == 3 else self.im0
@@ -601,6 +637,18 @@ class Camera:
         return self.im0.astype(np.uint8)
 
     def _process_frame(self, im0, masks):
+        """_summary_
+
+        Args:
+            im0 (_type_): reference_image
+            masks (_type_): matrice di booleani che rappresenta le regioni di interesse (ROI)
+
+        Raises:
+            ValueError: _description_
+
+        Returns:
+            _type_: _description_
+        """
 
         if im0 is None or not masks:
             raise ValueError("Immagine di riferimento e maschere ROI devono essere inizializzate prima di processare.")
@@ -655,6 +703,11 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_WB_TEMPERATURE, wb_temp)
     
     def get_latest_image(self):
+        """raccoglie il frame più anziano e lo elimina dal buffer
+
+        Returns:
+            _type_: frame più anziano e timestamp associato, o None se il buffer è vuoto
+        """
         if self.images:
             return self.images.popleft(), self.timestamps.popleft()
         else:
