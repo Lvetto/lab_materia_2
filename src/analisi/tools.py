@@ -19,8 +19,8 @@ def bilancia_timestamp_to_common(timestamp_unix, fmt=FORMATO_COMUNE):
     Supporta secondi (10 cifre) e millisecondi (13 cifre).
     """
     ts = float(timestamp_unix)
-    if ts > 1e12:  # millisecondi
-        ts /= 1000.0
+    if ts > 1e12:  # il ts è in millisecondi
+        ts /= 1000.0 # lo converto in secondi perché le funzioni standard di Python (come time.localtime(ts)) si aspettano il tempo espresso in secondi
     return time.strftime(fmt, time.localtime(ts))
 
 
@@ -82,9 +82,9 @@ def sort_images_and_timestamps(images, timestamps):
     """
     Ordina immagini e timestamp in base ai timestamp.
     """
-    combined = list(zip(timestamps, images))
-    combined.sort(key=lambda x: x[0])
-    sorted_timestamps, sorted_images = zip(*combined)
+    combined = list(zip(timestamps, images)) #lista di tuple con l'immagine associata al suo timestamp
+    combined.sort(key=lambda x: x[0]) #key fornisce il criterio di ordinamento cronologico rispetto alla prima coppia immagazzinata
+    sorted_timestamps, sorted_images = zip(*combined) #spacchetto le coppie di tuple in due liste separate ma ora ordinate cronologicamente
     return list(sorted_images), list(sorted_timestamps)
 
 
@@ -99,7 +99,9 @@ def load_bilancia_data(file_path):
     thicknesses = []
     with open(file_path, 'r') as f:
         for line in f:
-            parts = line.strip().split('\t')
+            parts = line.strip().split('\t') # lista di tre stringhe
+            # strip() rimuove gli spazi bianchi e i caratteri invisibili
+            # split('\t') divide la stringa in una lista di sottostringhe usando il tab come delimitatore
             if len(parts) >= 3:
                 ts_common = bilancia_timestamp_to_common(parts[0])
                 timestamps.append(ts_common)
@@ -122,7 +124,7 @@ def extract_common_timestamp_points(image_timestamps, bilancia_timestamps, max_d
             bil_time = time.strptime(bil_ts, FORMATO_COMUNE)
             bil_seconds = time.mktime(bil_time)
             
-            if abs(img_seconds - bil_seconds) <= max_diff_seconds:
+            if abs(img_seconds - bil_seconds) <= max_diff_seconds: # max_diffs_seconds è una finestra di accettabilità per considerare i timestamp "corrispondenti"
                 common_image_indices.append(i)
                 common_bilancia_indices.append(j)
                 break  # Assumiamo un match unico per ogni immagine
@@ -146,12 +148,15 @@ def moving_average_images(images, window_size):
     """
 
     if window_size == 1:
-        return images  # nessun filtro se la finestra è 1
+        return images  # nessun filtro se la finestra è 1 (meglio che sia un numero dispari)
+    # con finestra si intende il numero di immagini su cui mediare: il fotogramma centrale e quelle immediatamente vicine
 
     moving_avg_imgs = []
 
     for i in range(len(images)):
-        start_idx = max(0, i - window_size//2 + 1)
+        start_idx = max(0, i - window_size//2) # // è la divisione intera, senza parte decimale
+        # start_idx = max(0, i - window_size//2 + 1)
+        # tolto il +1 perché altrimenti la media non è centrata sull'i-esimo fotogramma 
         end_idx = min(len(images), i + window_size//2 + 1)
         window_imgs = images[start_idx:end_idx]
         moving_avg_img = np.mean(window_imgs, axis=0).astype(np.uint8)
@@ -166,9 +171,12 @@ def extract_roi_from_images(images, roi_center, roi_radius):
     roi_images = []
 
     for img in images:
-        mask = np.zeros_like(img, dtype=np.uint8)
-        cv2.circle(mask, roi_center, roi_radius, 255, -1)
+        mask = np.zeros_like(img, dtype=np.uint8) #crea un foglio nero (matrice di 0 delle dimensioni dell'immagine)
+        cv2.circle(mask, roi_center, roi_radius, 255, -1) #crea un cerchio bianco sull'immagine nera
         roi_img = cv2.bitwise_and(img, img, mask=mask)
+        #L'operatore AND bit a bit confronta l'immagine originale con la maschera:
+        # dove la maschera è bianca: l'immagine originale "passa" e rimane identica.
+        # dove la maschera è nera: l'immagine originale viene cancellata e diventa nera
         roi_images.append(roi_img)
 
     return roi_images
@@ -200,10 +208,10 @@ def compute_average_intensity(images):
 def extract_line_profile_np(image, x0, y0, x1, y1, num_samples=None):
     """
     Estrae i valori lungo il segmento tra due punti con campionamento uniforme.
-    Restituisce un array 1D di lunghezza fissa.
+    Restituisce un array 1D di lunghezza fissa, gli elementi rappresentano la luminosità incontrata.
     """
     if num_samples is None:
-        num_samples = int(np.hypot(x1 - x0, y1 - y0)) + 1
+        num_samples = int(np.hypot(x1 - x0, y1 - y0)) + 1 # il +1 per risolvere il "fencepost error"
 
     xs = np.linspace(x0, x1, num_samples)
     ys = np.linspace(y0, y1, num_samples)
@@ -212,7 +220,7 @@ def extract_line_profile_np(image, x0, y0, x1, y1, num_samples=None):
     xs = np.clip(xs, 0, w - 1)
     ys = np.clip(ys, 0, h - 1)
 
-    x0f = np.floor(xs).astype(int)
+    x0f = np.floor(xs).astype(int) # floor arrotonda per difetto
     y0f = np.floor(ys).astype(int)
     x1f = np.clip(x0f + 1, 0, w - 1)
     y1f = np.clip(y0f + 1, 0, h - 1)
@@ -225,7 +233,7 @@ def extract_line_profile_np(image, x0, y0, x1, y1, num_samples=None):
         dx * (1 - dy) * image[y0f, x1f] +
         (1 - dx) * dy * image[y1f, x0f] +
         dx * dy * image[y1f, x1f]
-    )
+    ) # ciascun elemento è una media pesata delle coordinate dei 4 pixel più vicini al punto campionato, con pesi che dipendono dalla distanza del punto campionato da ciascuno di questi pixel (dx e dy)
 
 def extract_line_profiles_np(images, x0, y0, x1, y1, num_samples=None):
     return [extract_line_profile_np(img, x0, y0, x1, y1, num_samples) for img in images]
