@@ -725,4 +725,159 @@ class Camera:
 
         return images, timestamps
 
+class SCPIInstrument:
+    """
+        Representation of a generic SCPI instrument communicating via PySerial.
+    """
 
+    commands = {
+        "identify": "*IDN?",
+        "reset": "*RST",
+        "clear": "*CLS",
+        "operation_complete" : "*OPC"
+    }
+    
+    def __init__(self, port, baudrate=9600, timeout=2, terminator='\r\n'):
+
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.terminator = terminator
+        
+        # Init the serial connection
+        self.serial = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+        self.reset_buffers()
+        
+
+    def reset_buffers(self):
+        """Reset internal buffers"""
+        self.serial.reset_input_buffer()
+        self.serial.reset_output_buffer()
+
+    def send_command(self, command):
+        """Sends a raw SCPI command (automatically appends the terminator)."""
+        complete_command = f"{command}{self.terminator}"
+        self.serial.write(complete_command.encode('ascii'))
+
+    def query(self, command, delay=0.05):
+        """Sends a query and reads the instrument's response."""
+        self.send_command(command)
+        time.sleep(delay)
+        response = self.serial.readline() 
+        # con readline(), dopo la lettura di una misura, il buffer del pc la elimina (non usiamo il buffer del keithley grazie alla funzione READ?)
+        
+        # decode and clean up the response
+        return response.decode('ascii', errors='ignore').strip()
+
+    def identify(self):
+        """Sends a universal SCPI command to identify the instrument."""
+        return self.query(command=self.commands["identify"])
+
+    def reset(self):
+        """Sends a universal SCPI command to reset the instrument to factory defaults."""
+        self.send_command(self.commands["reset"])
+        self.send_command(self.commands["clear"])
+
+    def close(self):
+        """Sends a command to close the communication cleanly."""
+        if self.serial.is_open:
+            self.serial.close()
+
+class ElettrometroKeithley(SCPIInstrument):
+    """Implementation for the Keithley 6517A."""
+
+    # specific SCPI commands for the Keithley 6517A
+    commands = {
+        "zero_check_on": "SYST:ZCH ON", #relè attivo
+        "zero_check_off": "SYST:ZCH OFF", #relè disattivo
+        "configure_current": "CONF:CURR:DC",
+        "configure_resistance": "CONF:RES",          
+        "format_elements": "FORM:ELEM READ,TST",    # chiede allo strumento: lettura e tempo
+        "reset_time": "SYST:TST:REL:RES",                # azzera il timer interno
+        "query_zero_check" : "SYST:ZCH?"
+        
+    }
+    
+    def __init__(self, port, baudrate=9600, timeout=2):
+        # create a serial connection with the correct terminator for the Keithley (typically \r\n)
+        super().__init__(port, baudrate, timeout, terminator='\r\n')
+
+        # combine the base class commands with the Keithley-specific commands
+        self.commands = {**SCPIInstrument.commands, **self.__class__.commands}
+        
+        self.read_buffer = deque()
+        self.timestamps = deque()
+        self.read_thread = None
+        self.reading = False
+        
+    def set_zero_check(self, state: bool):
+        """Attiva (True) o disattiva (False) lo Zero Check."""
+        cmd = self.commands["zero_check_on"] if state else self.commands["zero_check_off"]
+        self.send_command(cmd)
+        
+    def get_fresh_reading(self):
+        """Invia READ? e restituisce la stringa grezza senza toccare i relè."""
+        return self.query("READ?") #query usa readline()
+    
+    def parse_resistance_reading(self, raw_value):
+        """Funzione di utility per pulire i dati (da chiamare nel ciclo)."""
+        try:
+            parts = raw_value.split(',')
+            res_val = float(parts[0].replace('OHM', '').replace('A', '').replace('V', ''))
+            time_val = float(parts[1].replace('secs', ''))
+            return res_val, time_val
+        except (ValueError, IndexError):
+            return None, None
+
+    def init_current_reading(self): # non so se ci serve
+        """Set up the electrometer in a safe way to read currents."""
+        self.reset()
+        time.sleep(0.5)
+        self.send_command(self.commands["zero_check_on"])
+        self.send_command(self.commands["configure_current"])
+       
+    def init_resistance_reading(self):
+            """Prepara l'elettrometro per misurare resistenza e tempo."""
+            self.reset()
+            time.sleep(0.5)
+            self.send_command(self.commands["zero_check_on"])
+            self.send_command(self.commands["configure_resistance"])
+            self.send_command(self.commands["format_elements"])
+            
+            # Opzionale: azzera il timestamp all'inizio dell'esperimento
+            self.send_command(self.commands["reset_time"])
+            
+    def _continuous_read(self):
+        self.serial.reset_input_buffer()
+        while self.reading:
+            raw = self.get_fresh_reading()
+            res, t_instr = self.parse_resistance_reading(raw)
+            
+            if res is not None:
+                self.read_buffer.append(res)
+                self.timestamps.append(time.time()) # Timestamp PC per sincronia
+                
+                # OPTIONAL: Salva su file qui per non perdere dati
+                # with open("log_keithley.csv", "a") as f:
+                #    f.write(f"{time.time()},{res}\n")
+            
+            time.sleep(0.1)
+
+    def start_continuous_read(self):
+        if self.read_thread is None or not self.read_thread.is_alive():
+            self.init_resistance_reading() # Reset e config
+            self.set_zero_check(False)     # Togliamo lo zero check
+            self.reading = True
+            self.read_thread = threading.Thread(target=self._continuous_read)
+            self.read_thread.daemon = True
+            self.read_thread.start()
+
+    def stop_continuous_read(self):
+        self.reading = False
+        if self.read_thread is not None:
+            self.read_thread.join()
+        self.set_zero_check(True) # Rimettiamo lo zero check per sicurezza
+        
+    def close(self):
+        self.stop_continuous_read()
+        super().close()
