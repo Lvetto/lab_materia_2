@@ -164,6 +164,42 @@ def moving_average_images(images, window_size):
 
     return moving_avg_imgs
 
+
+def moving_average_images_gaussian_weights(images, window_size, sigma):
+    """
+    applica una media mobile alle immagini, dove ognuna è moltiplicata per un peso gaussiano
+    """
+
+    if window_size == 1:
+        return images  # nessun filtro se la finestra è 1 (meglio che sia un numero dispari)
+
+    moving_avg_imgs = []
+    half_window = window_size // 2
+    weights = np.zeros(window_size)
+    weights = np.exp(-0.5 * (np.arange(-half_window, half_window + 1) / sigma) ** 2) # calcola i pesi gaussiani per ogni posizione nella finestra
+    weights /= np.sum(weights)  # normalizza i pesi
+
+    for i in range(len(images)):
+        start_idx = max(0, i - half_window)
+        end_idx = min(len(images), i + half_window + 1)
+        window_imgs = images[start_idx:end_idx]
+
+        # Se la finestra è più piccola di window_size (ad esempio all'inizio o alla fine), adatta i pesi
+        if len(window_imgs) < window_size:
+            adjusted_weights = weights[half_window - (i - start_idx):half_window + (end_idx - i)]
+            adjusted_weights /= np.sum(adjusted_weights)  # normalizza i pesi adattati
+        else:
+            adjusted_weights = weights
+
+        weighted_avg_img = np.zeros_like(images[0], dtype=np.float32)
+        for img, w in zip(window_imgs, adjusted_weights):
+            weighted_avg_img += img.astype(np.float32) * w
+
+        moving_avg_imgs.append(weighted_avg_img.astype(np.uint8))
+
+    return moving_avg_imgs
+
+
 def extract_roi_from_images(images, roi_center, roi_radius):
     """
     Estrae una regione di interesse (ROI) circolare da ogni immagine, restituendo una lista di immagini ROI.
