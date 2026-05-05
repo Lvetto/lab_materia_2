@@ -825,7 +825,7 @@ class ElettrometroKeithley(SCPIInstrument):
         try:
             parts = raw_value.split(',')
             res_val = float(parts[0].replace('OHM', '').replace('A', '').replace('V', ''))
-            time_val = float(parts[1].replace('secs', ''))
+            time_val = float(parts[1].replace('sec', ''))
             return res_val, time_val
         except (ValueError, IndexError):
             return None, None
