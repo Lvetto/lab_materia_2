@@ -6,6 +6,7 @@ from collections import deque
 import cv2
 import numpy as np
 import platform
+import io
 
 class Bilancia:
     """
@@ -746,7 +747,9 @@ class SCPIInstrument:
         
         # Init the serial connection
         self.serial = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+        self.sio = io.TextIOWrapper(io.BufferedRWPair(self.serial, self.serial),newline=terminator)
         self.reset_buffers()
+
         
 
     def reset_buffers(self):
@@ -763,11 +766,14 @@ class SCPIInstrument:
         """Sends a query and reads the instrument's response."""
         self.send_command(command)
         time.sleep(delay)
-        response = self.serial.readline() 
+        response = self.serial.readline().decode('ascii', errors='ignore').strip()
+        #response = self.sio.readline()
         # con readline(), dopo la lettura di una misura, il buffer del pc la elimina (non usiamo il buffer del keithley grazie alla funzione READ?)
         
+        print(f"Query: {command} -> Response: {response.strip()}")
+
         # decode and clean up the response
-        return response.decode('ascii', errors='ignore').strip()
+        return response#response.decode('ascii', errors='ignore').strip()
 
     def identify(self):
         """Sends a universal SCPI command to identify the instrument."""
@@ -819,13 +825,19 @@ class ElettrometroKeithley(SCPIInstrument):
     def get_fresh_reading(self):
         """Invia READ? e restituisce la stringa grezza senza toccare i relè."""
         return self.query("READ?") #query usa readline()
+
+    def strip_units(self, value_str):
+        alphabet = list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        for char in alphabet:
+            value_str = value_str.replace(char, '')
+        return value_str.strip()
     
     def parse_resistance_reading(self, raw_value):
         """Funzione di utility per pulire i dati (da chiamare nel ciclo)."""
         try:
             parts = raw_value.split(',')
-            res_val = float(parts[0].replace('OHM', '').replace('A', '').replace('V', ''))
-            time_val = float(parts[1].replace('secs', ''))
+            res_val = float(self.strip_units(parts[0]))
+            time_val = float(self.strip_units(parts[1]))
             return res_val, time_val
         except (ValueError, IndexError):
             return None, None
@@ -852,13 +864,15 @@ class ElettrometroKeithley(SCPIInstrument):
         
         while self.reading:
             raw = self.get_fresh_reading()
-            res, time = self.parse_resistance_reading(raw)
+            res, t = self.parse_resistance_reading(raw)
             self.read_buffer.append(res)
-            self.time_buffer.append(time)
-            time.sleep(0.1)
+            self.time_buffer.append(t)
+            #time.sleep(0.1)
             
     def start_continuous_read(self):
         if self.read_thread is None or not self.read_thread.is_alive():
+            self.serial.reset_input_buffer()
+            self.serial.reset_output_buffer()
             self.set_zero_check(False) # disattivo il relè
             self.init_resistance_reading() # Reset e config
             self.reading = True
