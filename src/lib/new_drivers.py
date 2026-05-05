@@ -788,13 +788,14 @@ class ElettrometroKeithley(SCPIInstrument):
 
     # specific SCPI commands for the Keithley 6517A
     commands = {
-        "zero_check_on": "SYST:ZCH ON", #relè attivo
-        "zero_check_off": "SYST:ZCH OFF", #relè disattivo
+        "zero_check_on": "SYST:ZCH ON", #relè attivo (non posso far misure)
+        "zero_check_off": "SYST:ZCH OFF", #relè disattivo (posso far misure)
+        "query_zero_check" : "SYST:ZCH?",
         "configure_current": "CONF:CURR:DC",
         "configure_resistance": "CONF:RES",          
-        "format_elements": "FORM:ELEM READ,TST",    # chiede allo strumento: lettura e tempo
+        "format_elements": "FORM:ELEM READ,TST",    # imposto lo strumento per misurare: lettura e tempo
         "reset_time": "SYST:TST:REL:RES",                # azzera il timer interno
-        "query_zero_check" : "SYST:ZCH?"
+        
         
     }
     
@@ -806,7 +807,7 @@ class ElettrometroKeithley(SCPIInstrument):
         self.commands = {**SCPIInstrument.commands, **self.__class__.commands}
         
         self.read_buffer = deque()
-        self.timestamps = deque()
+        self.time_buffer = deque()
         self.read_thread = None
         self.reading = False
         
@@ -833,45 +834,38 @@ class ElettrometroKeithley(SCPIInstrument):
         """Set up the electrometer in a safe way to read currents."""
         self.reset()
         time.sleep(0.5)
-        self.send_command(self.commands["zero_check_on"])
+        self.send_command(self.commands["zero_check_off"])
         self.send_command(self.commands["configure_current"])
        
     def init_resistance_reading(self):
-            """Prepara l'elettrometro per misurare resistenza e tempo."""
+            """Prepara l'elettrometro per misurare resistenza e tempo, verificando se il relè è disattivo per poter iniziare a misurare."""
             self.reset()
             time.sleep(0.5)
-            self.send_command(self.commands["zero_check_on"])
             self.send_command(self.commands["configure_resistance"])
             self.send_command(self.commands["format_elements"])
             
             # Opzionale: azzera il timestamp all'inizio dell'esperimento
             self.send_command(self.commands["reset_time"])
+            self.serial.reset_input_buffer()
             
     def _continuous_read(self):
-        self.serial.reset_input_buffer()
+        
         while self.reading:
             raw = self.get_fresh_reading()
-            res, t_instr = self.parse_resistance_reading(raw)
-            
-            if res is not None:
-                self.read_buffer.append(res)
-                self.timestamps.append(time.time()) # Timestamp PC per sincronia
-                
-                # OPTIONAL: Salva su file qui per non perdere dati
-                # with open("log_keithley.csv", "a") as f:
-                #    f.write(f"{time.time()},{res}\n")
-            
+            res, time = self.parse_resistance_reading(raw)
+            self.read_buffer.append(res)
+            self.time_buffer.append(time)
             time.sleep(0.1)
-
+            
     def start_continuous_read(self):
         if self.read_thread is None or not self.read_thread.is_alive():
+            self.set_zero_check(False) # disattivo il relè
             self.init_resistance_reading() # Reset e config
-            self.set_zero_check(False)     # Togliamo lo zero check
             self.reading = True
             self.read_thread = threading.Thread(target=self._continuous_read)
             self.read_thread.daemon = True
             self.read_thread.start()
-
+            
     def stop_continuous_read(self):
         self.reading = False
         if self.read_thread is not None:
