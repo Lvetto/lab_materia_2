@@ -770,7 +770,7 @@ class SCPIInstrument:
         #response = self.sio.readline()
         # con readline(), dopo la lettura di una misura, il buffer del pc la elimina (non usiamo il buffer del keithley grazie alla funzione READ?)
         
-        print(f"Query: {command} -> Response: {response.strip()}")
+        #print(f"Query: {command} -> Response: {response.strip()}")
 
         # decode and clean up the response
         return response#response.decode('ascii', errors='ignore').strip()
