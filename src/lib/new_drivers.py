@@ -762,7 +762,7 @@ class SCPIInstrument:
         complete_command = f"{command}{self.terminator}"
         self.serial.write(complete_command.encode('ascii'))
 
-    def query(self, command, delay=0.05):
+    def query(self, command, delay=0.1):
         """Sends a query and reads the instrument's response."""
         self.send_command(command)
         time.sleep(delay)
@@ -797,7 +797,7 @@ class ElettrometroKeithley(SCPIInstrument):
         "zero_check_on": "SYST:ZCH ON", #relè attivo (non posso far misure)
         "zero_check_off": "SYST:ZCH OFF", #relè disattivo (posso far misure)
         "query_zero_check" : "SYST:ZCH?",
-        "configure_current": "CONF:CURR:DC",
+        "configure_current": "CONF:CURR",
         "configure_resistance": "CONF:RES",          
         "format_elements": "FORM:ELEM READ,TST",    # imposto lo strumento per misurare: lettura e tempo
         "reset_time": "SYST:TST:REL:RES",                # azzera il timer interno
@@ -827,7 +827,7 @@ class ElettrometroKeithley(SCPIInstrument):
         return self.query("READ?") #query usa readline()
 
     def strip_units(self, value_str):
-        alphabet = list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        alphabet = list("abcdefghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
         for char in alphabet:
             value_str = value_str.replace(char, '')
         return value_str.strip()
@@ -835,10 +835,16 @@ class ElettrometroKeithley(SCPIInstrument):
     def parse_resistance_reading(self, raw_value):
         """Funzione di utility per pulire i dati (da chiamare nel ciclo)."""
         try:
+            raw_value = raw_value.strip()
+            #raw_value = self.strip_units(raw_value)
             parts = raw_value.split(',')
+            res_val = float(parts[0])
+            time_val = float(parts[1])
+            return res_val, time_val
+            """parts = raw_value.split(',')
             res_val = float(self.strip_units(parts[0]))
             time_val = float(self.strip_units(parts[1]))
-            return res_val, time_val
+            return res_val, time_val"""
         except (ValueError, IndexError):
             return None, None
 
@@ -851,14 +857,14 @@ class ElettrometroKeithley(SCPIInstrument):
        
     def init_resistance_reading(self):
             """Prepara l'elettrometro per misurare resistenza e tempo, verificando se il relè è disattivo per poter iniziare a misurare."""
-            self.reset()
-            time.sleep(0.5)
+            #self.reset()
+            #time.sleep(0.5)
             self.send_command(self.commands["configure_resistance"])
             self.send_command(self.commands["format_elements"])
             
             # Opzionale: azzera il timestamp all'inizio dell'esperimento
             self.send_command(self.commands["reset_time"])
-            self.serial.reset_input_buffer()
+            #self.serial.reset_input_buffer()
             
     def _continuous_read(self):
         
@@ -867,12 +873,12 @@ class ElettrometroKeithley(SCPIInstrument):
             res, t = self.parse_resistance_reading(raw)
             self.read_buffer.append(res)
             self.time_buffer.append(t)
-            #time.sleep(0.1)
+            time.sleep(0.1)
             
     def start_continuous_read(self):
         if self.read_thread is None or not self.read_thread.is_alive():
-            self.serial.reset_input_buffer()
-            self.serial.reset_output_buffer()
+            #self.serial.reset_input_buffer()
+            #self.serial.reset_output_buffer()
             self.set_zero_check(False) # disattivo il relè
             self.init_resistance_reading() # Reset e config
             self.reading = True
