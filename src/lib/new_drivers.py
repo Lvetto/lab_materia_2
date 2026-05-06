@@ -750,8 +750,6 @@ class SCPIInstrument:
         self.sio = io.TextIOWrapper(io.BufferedRWPair(self.serial, self.serial),newline=terminator)
         self.reset_buffers()
 
-        
-
     def reset_buffers(self):
         """Reset internal buffers"""
         self.serial.reset_input_buffer()
@@ -798,9 +796,13 @@ class ElettrometroKeithley(SCPIInstrument):
         "zero_check_off": "SYST:ZCH OFF", #relè disattivo (posso far misure)
         "query_zero_check" : "SYST:ZCH?",
         "configure_current": "CONF:CURR",
-        "configure_resistance": "CONF:RES",          
+        "configure_resistance": "CONF:RES",
+        "configure_charge": "CONF:CHAR",          
         "format_elements": "FORM:ELEM READ,TST",    # imposto lo strumento per misurare: lettura e tempo
-        "reset_time": "SYST:TST:REL:RES",                # azzera il timer interno
+        "reset_time": "SYST:TST:REL:RES",
+        # azzera il timer interno
+        "specify_voltage": ":SOUR:VOLT:LEV:IMM:AMPL",
+        "set_current_range": ":SENS[1]]:VOLT[:DC]:RANG[:UPP]"
         
         
     }
@@ -825,6 +827,10 @@ class ElettrometroKeithley(SCPIInstrument):
     def get_fresh_reading(self):
         """Invia READ? e restituisce la stringa grezza senza toccare i relè."""
         return self.query("READ?") #query usa readline()
+    
+    def set_voltage (self, voltage):
+        command = f"{self.commands["specify_voltage"]} {voltage:.5f}"
+        self.send_command(command)
 
     def strip_units(self, value_str):
         alphabet = list("abcdefghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
