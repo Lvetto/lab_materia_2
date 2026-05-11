@@ -2,6 +2,8 @@
 
 Questa repo contiene tutte le risorse, i dati e il codice relativi al laboratorio di Fisica della Materia 2.
 
+La documentazione del codice è disponibile a [Clicca qui per leggere la documentazione](https://lvetto.github.io/lab_materia_2/lib.html)
+
 ## Struttura repository
 
 Di seguito è presentata la struttura delle cartelle del progetto e il loro contenuto:
