@@ -759,6 +759,7 @@ class SCPIInstrument:
         """Sends a raw SCPI command (automatically appends the terminator)."""
         complete_command = f"{command}{self.terminator}"
         self.serial.write(complete_command.encode('ascii'))
+        time.sleep(0.1)  # breve pausa per assicurarsi che il comando sia inviato prima di procedere
 
     def query(self, command, delay=0.1):
         """Sends a query and reads the instrument's response."""
@@ -781,6 +782,7 @@ class SCPIInstrument:
         """Sends a universal SCPI command to reset the instrument to factory defaults."""
         self.send_command(self.commands["reset"])
         self.send_command(self.commands["clear"])
+        self.send_command(self.commands["operation_complete"])
 
     def close(self):
         """Sends a command to close the communication cleanly."""
@@ -792,20 +794,27 @@ class ElettrometroKeithley(SCPIInstrument):
 
     # specific SCPI commands for the Keithley 6517A
     commands = {
-        "zero_check_on": "SYST:ZCH ON", #relè attivo (non posso far misure)
-        "zero_check_off": "SYST:ZCH OFF", #relè disattivo (posso far misure)
+        # sets the state of the zero check relay (1 for on, 0 for off) and queries its state
+        "zero_check_on": "SYST:ZCH {state}",
         "query_zero_check" : "SYST:ZCH?",
-        "configure_current": "CONF:CURR",
-        "configure_resistance": "CONF:RES",
-        "configure_charge": "CONF:CHAR",          
-        "format_elements": "FORM:ELEM READ,TST",    # imposto lo strumento per misurare: lettura e tempo
-        "reset_time": "SYST:TST:REL:RES", # azzera il timer interno
-        "specify_voltage": ":SOUR:VOLT:LEV:IMM:AMPL",
-        "set_current_range": ":SENS:CURR:DC:RANG:UPP {range}",
-        "enable_output": "OUTP:STAT 1",
-        "disable_output": "OUTP:STAT 0",
-        "query_autorange": ":SENS:CURR:DC:RANG:AUTO?",
-        "set_autorange": ":SENS:CURR:DC:RANG:AUTO {state}"    
+
+        # configures the measurment function of the electrometer to measure current (DC) or resistance, and queries the current configuration
+        "configure_reading": "CONF:{FUNC}",
+
+        # sets the formats for the returned data, removing units and including reading and timestamp in the output
+        "format_elements": "FORM:ELEM READ,TST",
+
+        # resets the internal timer
+        "reset_time": "SYST:TST:REL:RES",
+
+        # sets the voltage level for sourcing (in volts), queries the current voltage level and enable/disable the output
+        "specify_voltage": ":SOUR:VOLT:LEV:IMM:AMPL {voltage}",
+        "enable_output": "OUTP:STAT {state}",
+
+        # sets the range to auto and queries the state of auto-ranging
+        "set_current_range": ":SENS:{FUNC}:RANG:UPP {range}",
+        "query_autorange": ":SENS:{FUNC}:RANG:AUTO?",
+        "set_autorange": ":SENS:{FUNC}:RANG:AUTO {state}"    
         
     }
     
@@ -820,19 +829,88 @@ class ElettrometroKeithley(SCPIInstrument):
         self.time_buffer = deque()
         self.read_thread = None
         self.reading = False
-        
+
+        self.reading_func = None
+    
+    def _build_command(self, command, args):
+        completed_command = self.commands[command].format(**args)
+        return completed_command
+
+    # -- methods for the commands specific to the Keithley 6517A --
+
     def set_zero_check(self, state: bool):
         """Attiva (True) o disattiva (False) lo Zero Check."""
-        cmd = self.commands["zero_check_on"] if state else self.commands["zero_check_off"]
+        cmd = self._build_command("zero_check_on", {"state": int(state)})
         self.send_command(cmd)
-        
+
+    def set_source_voltage (self, voltage):
+        command = self._build_command("specify_voltage", {"voltage": voltage})
+        self.send_command(command)
+
+    def set_output(self, state: bool):
+        """Abilita (True) o disabilita (False) l'output del Keithley."""
+        cmd = self._build_command("enable_output", {"state": int(state)})
+        self.send_command(cmd)
+    
+    def configure_reading(self, func="CURR:DC"):
+        """Configura la funzione di misura del Keithley (es. corrente DC o resistenza)"""
+        cmd = self._build_command("configure_reading", {"FUNC": func})
+        self.send_command(cmd)
+        self.reading_func = func
+    
+    def set_autorange(self, func="CURR:DC", state=True):
+        """Abilita (True) o disabilita (False) l'autorange per la funzione di misura specificata."""
+        cmd = self._build_command("set_autorange", {"FUNC": func, "state": int(state)})
+        self.send_command(cmd)
+    
+    def set_manual_range(self, func="CURR:DC", range_val=1e-6):
+        """Imposta manualmente il range di misura per la funzione specificata (es. 1e-6 A per la corrente)."""
+        cmd = self._build_command("set_current_range", {"FUNC": func, "range": range_val})
+        self.send_command(cmd)
+
+    def set_format_elements(self):
+        """Configura il formato degli elementi restituiti nelle letture (es. solo valore e timestamp, senza unità)."""
+        self.send_command(self.commands["format_elements"])
+
+    def reset_time(self):
+        """Azzera il timer interno del Keithley, utile per avere un riferimento temporale nelle letture."""
+        self.send_command(self.commands["reset_time"])
+
+    # -- methods for querying and reading data --
+
+    def query_zero_check(self):
+        """Restituisce lo stato attuale dello Zero Check (1 per attivo, 0 per inattivo)."""
+        response = self.query(self.commands["query_zero_check"])
+        try:
+            return int(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta dello Zero Check: '{response}'")
+            return None
+    
+    def query_autorange(self, func="CURR:DC"):
+        """Restituisce lo stato attuale dell'autorange per la funzione specificata (1 per attivo, 0 per inattivo)."""
+        cmd = self._build_command("query_autorange", {"FUNC": func})
+        response = self.query(cmd)
+        try:
+            return int(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta dell'autorange: '{response}'")
+            return None
+    
+    def query_source_voltage(self):
+        """Restituisce il livello di tensione attualmente impostato per la sorgente."""
+        cmd = self._build_command("specify_voltage", {"voltage": ""})[:-1] + "?"
+        response = self.query(cmd)
+        try:
+            return float(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta del livello di tensione: '{response}'")
+            return None
+
     def get_fresh_reading(self):
         """Invia READ? e restituisce la stringa grezza senza toccare i relè."""
         return self.query("READ?") #query usa readline()
-    
-    def set_voltage (self, voltage):
-        command = f"{self.commands["specify_voltage"]} {voltage:.5f}"
-        self.send_command(command)
+
 
     def strip_units(self, value_str):
         alphabet = list("abcdefghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
@@ -858,29 +936,25 @@ class ElettrometroKeithley(SCPIInstrument):
 
     def init_current_reading(self): 
         """Set up the electrometer in a safe way to read currents."""
+        
         self.reset()
-        time.sleep(0.1)
-        self.send_command(self.commands["zero_check_off"])
-        time.sleep(0.1)
-        self.send_command(self.commands["configure_current"])
-        time.sleep(0.1)
-        self.send_command(self.commands["format_elements"])
-        time.sleep(0.1)
-        self.send_command(self.commands["reset_time"])
-        time.sleep(0.1)
-        self.send_command(self.commands["enable_output"])
-        time.sleep(0.1)
-       
+        self.set_zero_check(False)
+        self.configure_reading(func="CURR:DC")
+        self.set_format_elements()
+        self.reset_time()
+        self.set_autorange(func="CURR:DC", state=True)
+        self.set_source_voltage(0.1)
+        self.set_output(True)
+
     def init_resistance_reading(self):
-            """Prepara l'elettrometro per misurare resistenza e tempo, verificando se il relè è disattivo per poter iniziare a misurare."""
-            #self.reset()
-            #time.sleep(0.5)
-            self.send_command(self.commands["configure_resistance"])
-            self.send_command(self.commands["format_elements"])
-            
-            # Opzionale: azzera il timestamp all'inizio dell'esperimento
-            self.send_command(self.commands["reset_time"])
-            #self.serial.reset_input_buffer()
+        """Prepara l'elettrometro per misurare resistenza e tempo, verificando se il relè è disattivo per poter iniziare a misurare."""
+        
+        self.reset()
+        self.set_zero_check(False)
+        self.configure_reading(func="RES")
+        self.set_format_elements()
+        self.reset_time()
+        self.set_autorange(func="RES", state=True)
             
     def _continuous_read(self):
         
@@ -893,8 +967,6 @@ class ElettrometroKeithley(SCPIInstrument):
             
     def start_continuous_read(self):
         if self.read_thread is None or not self.read_thread.is_alive():
-            #self.serial.reset_input_buffer()
-            #self.serial.reset_output_buffer()
             self.reading = True
             self.read_thread = threading.Thread(target=self._continuous_read)
             self.read_thread.daemon = True
