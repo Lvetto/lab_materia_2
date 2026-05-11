@@ -976,7 +976,7 @@ class ElettrometroKeithley(SCPIInstrument):
         self.reading = False
         if self.read_thread is not None:
             self.read_thread.join()
-        self.send_command(self.commands["disable_output"])
+        self.set_output(False)
         self.set_zero_check(True) # Rimettiamo lo zero check per sicurezza
         
     def close(self):
