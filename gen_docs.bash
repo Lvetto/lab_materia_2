@@ -1,0 +1,1 @@
+cd /home/luca/Desktop/code/lab_mat_2/lab_materia_2 && mkdir -p docs && pdoc --html --force src -o docs
