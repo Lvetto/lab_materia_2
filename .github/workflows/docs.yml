@@ -2,7 +2,7 @@ name: Deploy pdoc to GitHub Pages
 
 on:
   push:
-    branches: ["main"] # Modifica se il tuo branch principale ha un nome diverso
+    branches: ["riordinato"]
   workflow_dispatch:
 
 permissions:
@@ -30,9 +30,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pdoc
-          # ATTENZIONE: Se il codice in src/lib richiede librerie esterne 
-          # (es. numpy, requests), devi installarle qui, altrimenti pdoc andrà in errore.
-          # pip install -r requirements.txt
+          pip install -r requirements.txt
 
       - name: Esegui lo script bash per pdoc
         run: |
@@ -45,7 +43,7 @@ jobs:
       - name: Carica l'artefatto per le Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: 'docs' # Passiamo esattamente la cartella creata dal tuo script
+          path: 'docs'
 
   deploy:
     environment:

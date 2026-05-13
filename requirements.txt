@@ -1,0 +1,7 @@
+numpy
+scipy
+pyserial
+opencv-python
+matplotlib
+ipywidgets
+pyvisa
