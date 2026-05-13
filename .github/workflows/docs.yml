@@ -1,0 +1,59 @@
+name: Deploy pdoc to GitHub Pages
+
+on:
+  push:
+    branches: ["main"] # Modifica se il tuo branch principale ha un nome diverso
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del codice
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Installa pdoc e le dipendenze del progetto
+        run: |
+          python -m pip install --upgrade pip
+          pip install pdoc
+          # ATTENZIONE: Se il codice in src/lib richiede librerie esterne 
+          # (es. numpy, requests), devi installarle qui, altrimenti pdoc andrà in errore.
+          # pip install -r requirements.txt
+
+      - name: Esegui lo script bash per pdoc
+        run: |
+          mkdir -p docs
+          PYTHONPATH="${PWD}" pdoc src/lib -o docs -d google
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Carica l'artefatto per le Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'docs' # Passiamo esattamente la cartella creata dal tuo script
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy su GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
