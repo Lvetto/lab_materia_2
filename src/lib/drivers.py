@@ -1073,6 +1073,5 @@ class ElettrometroKeithley(SCPIInstrument):
 
 # Collega documentazione protocollo esterna alle classi (visibile in pdoc).
 Bilancia.__doc__ = _load_protocol_doc("bilancia_maxtek.md")
-Bilancia2.__doc__ = _load_protocol_doc("bilancia_maxtek.md")
 SCPIInstrument.__doc__ = _load_protocol_doc("scpi_base.md")
 ElettrometroKeithley.__doc__ = _load_protocol_doc("keithley_6517a.md")
