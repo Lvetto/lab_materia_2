@@ -887,10 +887,12 @@ class ElettrometroKeithley(SCPIInstrument):
         # combine the base class commands with the Keithley-specific commands
         self.commands = {**SCPIInstrument.commands, **self.__class__.commands}
         
+        self.range_buffer = deque()
         self.read_buffer = deque()
         self.time_buffer = deque()
         self.read_thread = None
         self.reading = False
+        self.range = None
 
         self.reading_func = None
     
@@ -938,11 +940,18 @@ class ElettrometroKeithley(SCPIInstrument):
         """Abilita (True) o disabilita (False) l'autorange per la funzione di misura specificata."""
         cmd = self._build_command("set_autorange", {"FUNC": func, "state": int(state)})
         self.send_command(cmd)
+        
+        if state:
+            self.range = "auto"
+        else:
+            self.range = "manual"
     
     def set_manual_range(self, func="CURR:DC", range_val=1e-6):
         """Imposta manualmente il range di misura per la funzione specificata (es. 1e-6 A per la corrente)."""
         cmd = self._build_command("set_current_range", {"FUNC": func, "range": range_val})
         self.send_command(cmd)
+        
+        self.range = range_val
 
     def set_format_elements(self):
         """Configura il formato degli elementi restituiti nelle letture (es. solo valore e timestamp, senza unità)."""
@@ -1025,7 +1034,7 @@ class ElettrometroKeithley(SCPIInstrument):
         self.configure_reading(func="CURR:DC")
         self.set_format_elements()
         self.reset_time()
-        self.set_autorange(func="CURR:DC", state=True)
+        #self.set_autorange(func="CURR:DC", state=True)
         self.set_source_voltage(0.1)
         self.set_output(True)
 
@@ -1037,7 +1046,7 @@ class ElettrometroKeithley(SCPIInstrument):
         self.configure_reading(func="RES")
         self.set_format_elements()
         self.reset_time()
-        self.set_autorange(func="RES", state=True)
+        #self.set_autorange(func="RES", state=True)
             
     def _continuous_read(self):
         """Loop di lettura continua che popola buffer valori e tempi."""
@@ -1047,6 +1056,8 @@ class ElettrometroKeithley(SCPIInstrument):
             current, t = self.parse_resistance_reading(raw)
             self.read_buffer.append(current)
             self.time_buffer.append(t)
+            self.range_buffer.append(self.range)
+            
             time.sleep(0.1)
             
     def start_continuous_read(self):
