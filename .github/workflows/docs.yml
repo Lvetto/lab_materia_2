@@ -31,11 +31,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install pdoc
           pip install -r requirements.txt
+          pip install -e .
 
-      - name: Esegui lo script bash per pdoc
+      - name: Genera documentazione pdoc
         run: |
           mkdir -p docs
-          PYTHONPATH="${PWD}" pdoc src/lib -o docs -d google
+          PYTHONPATH="${PWD}/src" pdoc lib analisi -o docs -d google
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
