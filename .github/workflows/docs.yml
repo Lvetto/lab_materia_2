@@ -2,7 +2,7 @@ name: Deploy pdoc to GitHub Pages
 
 on:
   push:
-    branches: ["riordinato"]
+    branches: ["main", "riordinato"]
   workflow_dispatch:
 
 permissions:
@@ -35,8 +35,42 @@ jobs:
 
       - name: Genera documentazione pdoc
         run: |
+          rm -rf docs
           mkdir -p docs
           PYTHONPATH="${PWD}/src" pdoc lib analisi -o docs -d google
+
+      - name: Pubblica protocolli markdown
+        run: |
+          mkdir -p docs/protocol_docs
+          cp src/lib/protocol_docs/*.md docs/protocol_docs/
+          python - <<'PY'
+          from pathlib import Path
+
+          out = Path("docs/protocol_docs/index.html")
+          files = sorted(Path("docs/protocol_docs").glob("*.md"))
+          links = "\n".join(
+              f'<li><a href="{f.name}">{f.name}</a></li>' for f in files
+          )
+          out.write_text(
+              f"""<!doctype html>
+          <html lang="it">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Protocol docs</title>
+          </head>
+          <body>
+            <h1>Protocol docs</h1>
+            <p>File markdown sorgente dei protocolli strumentali.</p>
+            <ul>
+          {links}
+            </ul>
+          </body>
+          </html>
+          """,
+              encoding="utf-8",
+          )
+          PY
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
