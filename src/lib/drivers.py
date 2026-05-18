@@ -998,27 +998,12 @@ class DummyElettrometroKeithley(ElettrometroKeithley):
 
     def _next_dummy_sample(self):
         if not self._dummy_samples:
-            return 0.0, time.time() - self._dummy_t0
-
+            return 0.0
+        
         sample = self._dummy_samples[self._dummy_sample_idx % len(self._dummy_samples)]
         self._dummy_sample_idx += 1
 
-        if isinstance(sample, str):
-            parsed = self.parse_reading(sample, types=(float, float), units=False)
-            if parsed is not None:
-                return parsed
-            return 0.0, time.time() - self._dummy_t0
-
-        if isinstance(sample, (tuple, list)) and len(sample) >= 2:
-            try:
-                return float(sample[0]), float(sample[1])
-            except (TypeError, ValueError):
-                return 0.0, time.time() - self._dummy_t0
-
-        try:
-            return float(sample), time.time() - self._dummy_t0
-        except (TypeError, ValueError):
-            return 0.0, time.time() - self._dummy_t0
+        return str(sample), time.time() - self._dummy_t0
 
     def identify(self):
         return "KEITHLEY INSTRUMENTS INC.,MODEL 6517A,DUMMY,0.0"
