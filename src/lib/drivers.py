@@ -14,7 +14,6 @@ from collections import deque
 import cv2
 import numpy as np
 import platform
-import io
 from pathlib import Path
 
 
@@ -22,7 +21,9 @@ _PROTOCOL_DOCS_DIR = Path(__file__).with_name("protocol_docs")
 
 
 def _load_protocol_doc(filename: str) -> str:
-    """Legge un documento Markdown da usare come docstring runtime."""
+    """Legge un documento Markdown da usare come docstring runtime.
+        Serve per la documentazione.
+        """
     return (_PROTOCOL_DOCS_DIR / filename).read_text(encoding="utf-8").strip()
 
 class Bilancia:
@@ -30,10 +31,11 @@ class Bilancia:
     Rappresenta una microbilancia maxtek, implementando il protocollo di comunicazione seriale per inviare comandi e ricevere dati.
     """
 
-    # Il protocollo prevede un messaggio con Header (2 byte), Address (1 byte), Instruction Code (1 byte), Data Length (1 byte), Data (variabile) e Checksum (1 byte).
     Header = bytes([255, 254])
+    """
+    Header fisso, identifica l'inizio di un messaggio valido inviato o ricevuto
+    """
 
-    # I comandi supportati e i loro codici di istruzione
     comandi = {
         "Remote activation" : bytes([0]),
         "Send monitor config" : bytes([1]),
@@ -42,21 +44,29 @@ class Bilancia:
         "Send monitor status" : bytes([4]),
         "Config data-logging" : bytes([5]),
     }
+    """
+    comandi supportati con i loro codici istruzione
+    """
 
-    # I dati per il comando "Remote activation" e i loro codici
     remote_activation_data = {
     "start" : bytes([1]),
     "stop" : bytes([2]),
     "shutter" : bytes([4]),
     }
+    """
+    le opzioni valide per il comando "Remote activation" e i loro codici, usati per costruire il messaggio da inviare alla bilancia
+    """
     
-    # I dati per il comando "Config data-logging" e la loro posizione nei byte di configurazione
     config_data_logging_data = [
     # byte 1
     ["Displayed rate", "Displayed thickness", "Displayed frequency", "Sensor 1 rate", "Sensor 1 thickness", "Sensor 1 frequency", "Sensor 2 rate", "Sensor 2 thickness"],
     # byte 2
     ["Sensor 2 frequency", "Active sensor number"]
     ]
+    """
+    Cofig data logging richiede due byte di dati, in cui ogni bit=1 rappresenta un valore restituito dalla bilancia quando il data logging è attivo.
+    Questi sono i nomi dei valori con la loro posizione nei due byte
+    """
     
     # dimensioni in byte dei dati loggati per ogni voce (per la decodifica)
     data_log_sizes = {
@@ -71,6 +81,9 @@ class Bilancia:
         "Sensor 2 frequency": 11,
         "Active sensor number": 1
     }
+    """
+    dimensioni in byte dei valori restituiti dalla bilancia
+    """
 
     def __init__(self, porta, baudrate=9600, dev_addr=1):
         """
@@ -107,6 +120,8 @@ class Bilancia:
         # buffer per i dati grezzi letti dal seriale, prima della decodifica, e i loro timestamp
         self._raw_read_buffer = deque()
         self._raw_timestamps = deque()
+
+    # -- costruzione del messaggio secondo il protocollo della bilancia --
 
     def _data_len(self, data):
         """
@@ -187,7 +202,36 @@ class Bilancia:
         # componiamo e restituiamo il messaggio completo, che include l'Header, l'indirizzo del dispositivo, il codice di istruzione, la lunghezza dei dati, i dati stessi e il checksum
         encoded_command = self.Header + self.dev_addr + instr_code + self._data_len(data_encoded) + data_encoded + self._checksum(instr_code, data_encoded)
         return encoded_command
-    
+
+    def send_command(self, comando, data=None):
+        """Invia un comando alla bilancia e legge il pacchetto di stato.
+
+        Args:
+            comando (str): Nome comando supportato da ``self.comandi``.
+            data (object | None): Payload associato al comando.
+
+        Returns:
+            dict | None: Risposta decodificata di stato, oppure ``None`` se la
+            risposta non e disponibile o incompleta.
+        """
+        if self.ser is None:
+            print("Comando inviato a dispositivo dummy:", comando, data)
+            return
+        
+        self.ser.reset_input_buffer()
+        message = self._build_message(comando, data)
+        self.ser.write(message)
+
+        response = self.ser.read(8) 
+
+        if len(response) == 8:
+            return self._decode_message(response)
+        else:
+            print("Errore: Risposta non ricevuta o parziale dal dispositivo.")
+            return None
+ 
+    # -- decodifica dei messaggi ricevuti dalla bilancia --
+
     def _decode_message(self, message):
         """
         Decodifica un messaggio di risposta dalla bilancia, estraendo le informazioni chiave come l'indirizzo, il codice di istruzione, la lunghezza dei dati, i dati stessi e il checksum ricevuto.
@@ -212,23 +256,6 @@ class Bilancia:
             "received_checksum": message[7]
         }
     
-    def _read_from_buffer(self, num_bytes):
-        """
-        Legge un certo numero di byte dal buffer seriale, se disponibili. Se non ci sono abbastanza byte disponibili, restituisce None.
-
-        Args:
-            num_bytes (int): Il numero di byte da leggere.
-
-        Returns:
-            bytes or None: I byte letti dal buffer seriale, o None se non ci sono abbastanza byte disponibili.
-        """
-
-        # leggiamo solo se ci sono abbastanza byte disponibili nel buffer seriale, altrimenti restituiamo None per indicare che non abbiamo dati completi da leggere
-        if self.ser.in_waiting >= num_bytes:
-            message = self.ser.read(num_bytes)
-            return message
-        return None
-    
     def _decode_ascii_data(self, data, sizes):
         """
         Decodifica un messaggio di dati ASCII diviso in parti di dimensioni specificate, restituendo una lista di stringhe decodificate e pulite da spazi bianchi.
@@ -251,26 +278,62 @@ class Bilancia:
 
         return split_message
 
-    def _handshake_data_logging(self, data):
+    def _decode_binary_data(self, data, types, sizes):
         """
-        Esegue un handshake per la configurazione del data-logging, inviando prima un comando di configurazione vuoto per resettare eventuali configurazioni precedenti, pulendo il buffer di lettura e poi inviando il comando con i dati desiderati.
+        Decodifica un messaggio di dati binari, restituendo una lista di interi rappresentati dai byte del messaggio.
+
+        Non è testata e supporta decodifica solo di interi e stringhe ASCII.
 
         Args:
-            data (list of str): I dati per la configurazione del data-logging.
+            data (bytes): Il messaggio di dati binari da decodificare.
+            types (list of type): Una lista dei tipi di dati da decodificare.
+            sizes (list of int): Una lista delle dimensioni per ogni parte del messaggio.
+
+        Returns:
+            list: Una lista di valori decodificati, il cui tipo dipende dai tipi specificati.
         """
 
-        self.send_command("Config data-logging", [])
+        decoded_values = []
 
-        time.sleep(0.1)
+        # decodifica un messaggio di dati binari, interpretando i byte del messaggio come valori interi o float a seconda dei tipi specificati. Restituisce una lista di valori decodificati.
+        idx = 0
+        for t, size in zip(types, sizes):
 
-        self.read_buffer.clear()
-        self.timestamps.clear()
-        self.ser.reset_input_buffer()
+            bits = data[idx:idx+size]
+            idx += size
 
-        time.sleep(0.1)
+            if t == int:
+                value = int.from_bytes(bits, byteorder='little')
+ 
+            elif t == str:
+                value = bits.decode('ascii').strip()
 
-        self.send_command("Config data-logging", data)
+            else:
+                raise ValueError("Tipo di dato non supportato per la decodifica")
 
+
+
+        return decoded_values
+
+    # -- lettura dei dati loggati dalla bilancia --
+ 
+    def _read_from_buffer(self, num_bytes):
+        """
+        Legge un certo numero di byte dal buffer seriale, se disponibili. Se non ci sono abbastanza byte disponibili, restituisce None.
+
+        Args:
+            num_bytes (int): Il numero di byte da leggere.
+
+        Returns:
+            bytes or None: I byte letti dal buffer seriale, o None se non ci sono abbastanza byte disponibili.
+        """
+
+        # leggiamo solo se ci sono abbastanza byte disponibili nel buffer seriale, altrimenti restituiamo None per indicare che non abbiamo dati completi da leggere
+        if self.ser.in_waiting >= num_bytes:
+            message = self.ser.read(num_bytes)
+            return message
+        return None
+    
     def _continuous_read(self, data, interval=0.01):
         """
         Legge continuamente i dati dal buffer seriale, separando i byte e associando un timestamp a ciascuno, e li aggiunge a un buffer interno di lettura.
@@ -292,27 +355,62 @@ class Bilancia:
                         self._raw_timestamps.append(time.time())
             
             time.sleep(interval)
-
-    def _dummy_continuous_read(self, data, chunk_size=16, iterations=100):
-        """
-        Simula la lettura continua di dati, prendendo chunk di dati da una lista predefinita e aggiungendoli al buffer interno di lettura con un timestamp associato, per testare la logica di decodifica senza hardware reale.
+ 
+    def start_continuous_read(self, data=["Displayed rate", "Displayed thickness"]):
+        """Avvia lettura e decodifica continue in thread separati.
 
         Args:
-            data (list of bytes): I dati da simulare.
-            chunk_size (int, optional): La dimensione di ciascun chunk di dati. Defaults to 16.
-            iterations (int, optional): Il numero di iterazioni da eseguire. Defaults to 100.
+            data (list[str]): Campi da richiedere nel data-logging.
         """
-        i = 0
-        while self.reading and i < iterations * chunk_size:
-            val = data[i:i+chunk_size]  # Simula la lettura di chunk di dati
-            i = (i + chunk_size) % len(data)  # Loop attraverso i dati
-            with self.lock:
-                if val:
-                    for byte in val:
-                        self._raw_read_buffer.append(byte)
-                        self._raw_timestamps.append(time.time())
-            time.sleep(0.01)
+        if self.read_thread is None or not self.read_thread.is_alive():
+
+            self.send_command("Config data-logging", data)
     
+            self.read_thread = threading.Thread(target=self._continuous_read, args=(data,))
+            self.read_thread.daemon = True
+            self.reading = True
+            self.read_thread.start()
+
+        if self.decode_thread is None or not self.decode_thread.is_alive():
+            sizes = [self.data_log_sizes[item] for item in data]
+            self.decode_thread = threading.Thread(target=self._decode_thread, args=(sizes,))
+            self.decode_thread.daemon = True
+            self.decoding = True
+            self.decode_thread.start()
+
+    def stop_continuous_read(self):
+        """Ferma thread di lettura/decodifica e chiude il data-logging."""
+        self.reading = False
+        self.send_command("Config data-logging", [])
+        if self.read_thread is not None:
+            self.read_thread.join()
+        self.decoding = False
+        if self.decode_thread is not None:
+            self.decode_thread.join()
+
+    def _handshake_data_logging(self, data):
+        """
+        Esegue un handshake per la configurazione del data-logging, inviando prima un comando di configurazione vuoto per resettare eventuali configurazioni precedenti, pulendo il buffer di lettura e poi inviando il comando con i dati desiderati.
+
+        Args:
+            data (list of str): I dati per la configurazione del data-logging.
+        """
+
+        self.send_command("Config data-logging", [])
+
+        time.sleep(0.1)
+
+        self.read_buffer.clear()
+        self.timestamps.clear()
+        self.ser.reset_input_buffer()
+
+        time.sleep(0.1)
+
+        self.send_command("Config data-logging", data)
+
+
+    # -- decodifica dei dati grezzi letti dal buffer seriale --
+
     def _decode_raw_buffer(self, sizes):
         """
         Decodifica i dati grezzi letti dal buffer seriale, cercando l'Header, estraendo i byte di indirizzo, codice di istruzione, lunghezza dei dati e i dati stessi, decodificando i dati in stringhe ASCII e aggiungendoli al buffer di lettura decodificato con il timestamp associato.
@@ -363,6 +461,8 @@ class Bilancia:
                 self._decode_raw_buffer(sizes)
             time.sleep(0.05)
 
+    #-- metodi per accedere ai dati decodificati --
+
     def get_latest_data(self):
         """
         Legge l'ultimo dato decodificato dal buffer di lettura, restituendo sia il dato
@@ -394,95 +494,587 @@ class Bilancia:
 
         return data, timestamps
 
-    def send_command(self, comando, data=None):
-        """Invia un comando alla bilancia e legge il pacchetto di stato.
+    # -- chiusura della connessione seriale --
 
-        Args:
-            comando (str): Nome comando supportato da ``self.comandi``.
-            data (object | None): Payload associato al comando.
+    def close(self):
+        """Chiude in modo sicuro lettura continua e porta seriale."""
+        self.stop_continuous_read()
+        if self.ser is not None and self.ser.is_open:
+            self.ser.close()
 
-        Returns:
-            dict | None: Risposta decodificata di stato, oppure ``None`` se la
-            risposta non e disponibile o incompleta.
-        """
-        if self.ser is None:
-            print("Comando inviato a dispositivo dummy:", comando, data)
-            return
-        
-        self.ser.reset_input_buffer()
-        message = self._build_message(comando, data)
-        self.ser.write(message)
+    def __del__(self):
+        """Assicura la chiusura della porta seriale alla distruzione dell'oggetto."""
+        self.close()
 
-        response = self.ser.read(8) 
+class DummyBilancia(Bilancia):
+    """Versione dummy della Bilancia Maxtek per test senza hardware."""
 
-        if len(response) == 8:
-            return self._decode_message(response)
+    def __init__(self, samples=None, dev_addr=1):
+        super().__init__(porta=None, baudrate=9600, dev_addr=dev_addr)
+        self._dummy_samples = list(samples) if samples is not None else [[0.0, 0.0]]
+        self._dummy_sample_idx = 0
+        self._dummy_active_fields = ["Displayed rate", "Displayed thickness"]
+        self._dummy_remote_state = "stop"
+
+    def set_dummy_samples(self, samples):
+        """Aggiorna la sequenza di campioni usata nelle letture dummy."""
+        self._dummy_samples = list(samples)
+        self._dummy_sample_idx = 0
+
+    def _normalize_dummy_sample(self, sample, fields):
+
+        if isinstance(sample, dict):
+            values = [sample.get(name, 0.0) for name in fields]
+
+        elif isinstance(sample, (tuple, list)):
+            if len(sample) >= len(fields):
+                values = list(sample[:len(fields)])
+            else:
+                values = list(sample) + [0.0] * (len(fields) - len(sample))
         else:
-            print("Errore: Risposta non ricevuta o parziale dal dispositivo.")
-            return None
- 
-    def start_continuous_read(self, data=["Displayed rate", "Displayed thickness"]):
-        """Avvia lettura e decodifica continue in thread separati.
+            values = [sample] + [0.0] * (len(fields) - 1)
 
-        Args:
-            data (list[str]): Campi da richiedere nel data-logging.
-        """
+        return [str(val).strip() for val in values]
+
+    def _next_dummy_reading(self, fields):
+        if not self._dummy_samples:
+            reading = ["0.0" for _ in fields]
+        else:
+            sample = self._dummy_samples[self._dummy_sample_idx % len(self._dummy_samples)]
+            self._dummy_sample_idx += 1
+            reading = self._normalize_dummy_sample(sample, fields)
+
+        return reading, time.time()
+
+    def send_command(self, comando, data=None):
+        if comando == "Remote activation":
+            self._dummy_remote_state = data if data is not None else "stop"
+        elif comando == "Config data-logging":
+            self._dummy_active_fields = list(data) if data else []
+
+        instr_code = self.comandi.get(comando, bytes([0]))
+        return {
+            "header": self.Header,
+            "address": self.dev_addr[0],
+            "status_instr_code": 253,
+            "data_length": 2,
+            "sent_instr_code": instr_code[0],
+            "receive_code": 0,
+            "received_checksum": 0,
+        }
+
+    def _continuous_read(self, data, interval=0.01):
+        while self.reading:
+            values, ts = self._next_dummy_reading(data)
+            with self.lock:
+                self.read_buffer.append(values)
+                self.timestamps.append(ts)
+            time.sleep(interval)
+
+    def start_continuous_read(self, data=["Displayed rate", "Displayed thickness"], interval=0.01):
         if self.read_thread is None or not self.read_thread.is_alive():
-
             self.send_command("Config data-logging", data)
-    
-            self.read_thread = threading.Thread(target=self._continuous_read, args=(data,))
-            self.read_thread.daemon = True
             self.reading = True
+            self.read_thread = threading.Thread(target=self._continuous_read, args=(data, interval))
+            self.read_thread.daemon = True
             self.read_thread.start()
 
-        if self.decode_thread is None or not self.decode_thread.is_alive():
-            sizes = [self.data_log_sizes[item] for item in data]
-            self.decode_thread = threading.Thread(target=self._decode_thread, args=(sizes,))
-            self.decode_thread.daemon = True
-            self.decoding = True
-            self.decode_thread.start()
-    
-    def dummy_start_continuous_read(self, data, data_name=["Displayed rate", "Displayed thickness"], chunk_size=16, iterations=100):
-        """Avvia una simulazione di lettura continua per test offline.
+        self.decoding = False
 
-        Args:
-            data (list[int] | bytes): Byte stream simulato.
-            data_name (list[str]): Nomi campi usati per la decodifica.
-            chunk_size (int): Dimensione chunk letti a ogni iterazione.
-            iterations (int): Numero di cicli della simulazione.
-        """
-        if self.read_thread is None or not self.read_thread.is_alive():
-            
-            self.send_command("Config data-logging", data_name)
-
-            self.read_thread = threading.Thread(target=self._dummy_continuous_read, args=(data, chunk_size, iterations))
-            self.read_thread.daemon = True
-            self.reading = True
-            self.read_thread.start()
-
-        if self.decode_thread is None or not self.decode_thread.is_alive():
-            sizes = [self.data_log_sizes[item] for item in data_name]
-            self.decode_thread = threading.Thread(target=self._decode_thread, args=(sizes,))
-            self.decode_thread.daemon = True
-            self.decoding = True
-            self.decode_thread.start()
-    
     def stop_continuous_read(self):
-        """Ferma thread di lettura/decodifica e chiude il data-logging."""
         self.reading = False
         self.send_command("Config data-logging", [])
         if self.read_thread is not None:
             self.read_thread.join()
         self.decoding = False
-        if self.decode_thread is not None:
-            self.decode_thread.join()
+
+    def _handshake_data_logging(self, data):
+        self.read_buffer.clear()
+        self.timestamps.clear()
+        self.send_command("Config data-logging", data)
+
+    def read_single(self, data=["Displayed rate", "Displayed thickness"], index=None):
+        """Simula una singola lettura e restituisce ``(valori, timestamp)``."""
+        if index is not None and self._dummy_samples:
+            self._dummy_sample_idx = index % len(self._dummy_samples)
+        return self._next_dummy_reading(data)
+
+
+class SCPIInstrument:
+    """
+        Generico strumento con protocollo SCPI.
+        Implementa le basi per la comunicazione secondo il protocollo e alcuni comandi comuni.
+    """
+
+    commands = {
+        "identify": "*IDN?",
+        "reset": "*RST",
+        "clear": "*CLS",
+        "operation_complete" : "*OPC"
+    }
+    
+    def __init__(self, port, baudrate=9600, timeout=2, terminator='\r\n'):
+        """Inizializza connessione seriale SCPI.
+
+        Args:
+            port (str): Porta seriale strumento.
+            baudrate (int): Baudrate seriale.
+            timeout (float): Timeout lettura/scrittura seriale in secondi.
+            terminator (str): Terminatore comandi SCPI.
+        """
+
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.terminator = terminator
+        
+        # permette inizializzazione senza porta seriale (modalita dummy)
+        if self.port is not None:
+            self.serial = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+            self.reset_buffers()
+        else:
+            self.serial = None
+
+    def reset_buffers(self):
+        """Reset internal buffers"""
+        if self.serial is None:
+            return
+        self.serial.reset_input_buffer()
+        self.serial.reset_output_buffer()
+
+    def send_command(self, command):
+        """Sends a raw SCPI command (automatically appends the terminator)."""
+        if self.serial is None:
+            print("Comando SCPI inviato a dispositivo dummy:", command)
+            return
+        complete_command = f"{command}{self.terminator}"
+        self.serial.write(complete_command.encode('ascii'))
+        time.sleep(0.1)  # breve pausa per assicurarsi che il comando sia inviato prima di procedere
+
+    def query(self, command, delay=0.1):
+        """Sends a query and reads the instrument's response."""
+        if self.serial is None:
+            print("Query SCPI inviata a dispositivo dummy:", command)
+            return ""
+        self.send_command(command)
+        time.sleep(delay)
+        response = self.serial.readline().decode('ascii', errors='ignore').strip()
+        #response = self.sio.readline()
+        # con readline(), dopo la lettura di una misura, il buffer del pc la elimina (non usiamo il buffer del keithley grazie alla funzione READ?)
+        
+        #print(f"Query: {command} -> Response: {response.strip()}")
+
+        # decode and clean up the response
+        return response#response.decode('ascii', errors='ignore').strip()
+
+    def identify(self):
+        """Sends a universal SCPI command to identify the instrument."""
+        return self.query(command=self.commands["identify"])
+
+    def reset(self):
+        """Sends a universal SCPI command to reset the instrument to factory defaults."""
+        self.send_command(self.commands["reset"])
+        self.send_command(self.commands["clear"])
+        self.send_command(self.commands["operation_complete"])
 
     def close(self):
-        """Chiude in modo sicuro lettura continua e porta seriale."""
+        """Sends a command to close the communication cleanly."""
+        if self.serial is not None and self.serial.is_open:
+            self.serial.close()
+
+class ElettrometroKeithley(SCPIInstrument):
+    """Implementation for the Keithley 6517A."""
+
+    commands = {
+        # attiva o disattiva lo zero check
+        "zero_check_on": "SYST:ZCH {state}",
+        "query_zero_check" : "SYST:ZCH?",
+
+        # configura la funzione di lettura (es. CURR:DC, RES, VOLT:DC)
+        "configure_reading": "CONF:{FUNC}",
+
+        # configura il formato degli elementi restituiti nelle letture (es. solo valore e timestamp, senza unità)
+        "format_elements": "FORM:ELEM {FORMAT}",
+
+        # azzera il timer interno del Keithley, utile per avere un riferimento temporale nelle letture
+        "reset_time": "SYST:TST:REL:RES",
+
+        # specifica la tensione di sourcing del Keithley e attiva l'output
+        "specify_voltage": ":SOUR:VOLT:LEV:IMM:AMPL {voltage}",
+        "enable_output": "OUTP:STAT {state}",
+
+        # gestisce l'autorange e il range manuale
+        "set_current_range": ":SENS:{FUNC}:RANG:UPP {range}",
+        "query_autorange": ":SENS:{FUNC}:RANG:AUTO?",
+        "set_autorange": ":SENS:{FUNC}:RANG:AUTO {state}"    
+        
+    }
+    """
+    comandi specifici per il Keithley 6517A, che si aggiungono a quelli generici definiti nella classe base SCPIInstrument.
+    Questi comandi permettono di configurare e interrogare le funzionalità specifiche dell'elettrometro, come lo zero check,
+    la configurazione della lettura, il formato dei dati restituiti, la gestione del timer interno,
+    la specifica della tensione di sourcing e la gestione dell'autorange per le misure di corrente o resistenza.
+    """
+    
+    def __init__(self, port, baudrate=9600, timeout=2):
+        """Inizializza driver Keithley e buffer di lettura continua.
+
+        Args:
+            port (str): Porta seriale strumento.
+            baudrate (int): Baudrate seriale.
+            timeout (float): Timeout operazioni seriali.
+        """
+        # create a serial connection with the correct terminator for the Keithley (typically \r\n)
+        super().__init__(port, baudrate, timeout, terminator='\r\n')
+
+        # combine the base class commands with the Keithley-specific commands
+        self.commands = {**SCPIInstrument.commands, **self.__class__.commands}
+        
+        self.read_buffer = deque()
+        self.time_buffer = deque()
+        self.read_thread = None
+        self.reading = False
+
+        self.reading_func = None
+    
+    def _build_command(self, command, args):
+        """Costruisce una stringa SCPI formattando il template comando.
+
+        Args:
+            command (str): Chiave comando in ``self.commands``.
+            args (dict[str, object]): Parametri di sostituzione del template.
+
+        Returns:
+            str: Comando SCPI pronto da inviare.
+        """
+        completed_command = self.commands[command].format(**args)
+        return completed_command
+
+    # -- metodi per i comandi specifici del Keithley 6517A --
+
+    def set_zero_check(self, state: bool):
+        """Attiva (True) o disattiva (False) lo Zero Check."""
+        cmd = self._build_command("zero_check_on", {"state": int(state)})
+        self.send_command(cmd)
+
+    def set_source_voltage (self, voltage):
+        """Imposta la tensione della sorgente del Keithley.
+
+        Args:
+            voltage (float): Tensione target in volt.
+        """
+        command = self._build_command("specify_voltage", {"voltage": voltage})
+        self.send_command(command)
+
+    def set_output(self, state: bool):
+        """Abilita (True) o disabilita (False) l'output del Keithley."""
+        cmd = self._build_command("enable_output", {"state": int(state)})
+        self.send_command(cmd)
+   
+    def set_autorange(self, func="CURR:DC", state=True):
+        """Abilita (True) o disabilita (False) l'autorange per la funzione di misura specificata."""
+        cmd = self._build_command("set_autorange", {"FUNC": func, "state": int(state)})
+        self.send_command(cmd)
+    
+    def set_manual_range(self, func="CURR:DC", range_val=1e-6):
+        """Imposta manualmente il range di misura per la funzione specificata (es. 1e-6 A per la corrente)."""
+        cmd = self._build_command("set_current_range", {"FUNC": func, "range": range_val})
+        self.send_command(cmd)
+
+    def set_format_elements(self, format_str="READ,TST"):
+        """Configura il formato degli elementi restituiti nelle letture (es. solo valore e timestamp, senza unità)."""
+        cmd = self._build_command("format_elements", {"FORMAT": format_str})
+        self.send_command(cmd)
+
+    def reset_time(self):
+        """Azzera il timer interno del Keithley, utile per avere un riferimento temporale nelle letture."""
+        self.send_command(self.commands["reset_time"])
+
+    # -- metodi per leggere dati --
+
+    def query_zero_check(self):
+        """Restituisce lo stato attuale dello Zero Check (1 per attivo, 0 per inattivo)."""
+        response = self.query(self.commands["query_zero_check"])
+        try:
+            return int(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta dello Zero Check: '{response}'")
+            return None
+    
+    def query_autorange(self, func="CURR:DC"):
+        """Restituisce lo stato attuale dell'autorange per la funzione specificata (1 per attivo, 0 per inattivo)."""
+        cmd = self._build_command("query_autorange", {"FUNC": func})
+        response = self.query(cmd)
+        try:
+            return int(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta dell'autorange: '{response}'")
+            return None
+    
+    def query_source_voltage(self):
+        """Restituisce il livello di tensione attualmente impostato per la sorgente."""
+        cmd = self._build_command("specify_voltage", {"voltage": ""})[:-1] + "?"
+        response = self.query(cmd)
+        try:
+            return float(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta del livello di tensione: '{response}'")
+            return None
+
+    def read(self):
+        """Invia READ? e restituisce la stringa grezza"""
+        return self.query("READ?") #query usa readline()
+
+    # -- metodi per interpretare i dati --
+
+    def strip_units(self, value_str):
+        """
+        Rimuove caratteri alfabetici da una stringa di misura.
+
+            (Nora: meglio non usarla, perchè non è testata)
+
+        Args:
+            value_str (str): Valore raw eventualmente contenente unita.
+
+        Returns:
+            str: Stringa ripulita da lettere e spazi laterali.
+        """
+        alphabet = list("abcdefghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
+        for char in alphabet:
+            value_str = value_str.replace(char, '')
+        return value_str.strip()
+    
+    def parse_reading(self, raw_value, types, units=False):
+        """Funzione di utility per pulire i dati."""
+        try:
+            raw_value = raw_value.strip()
+            parts = raw_value.split(',')
+
+            if len(parts) != len(types):
+                raise ValueError(f"Numero di parti nella lettura ({len(parts)}) non corrisponde al numero di tipi attesi ({len(types)}). Lettura: '{raw_value}'")
+            
+            parsed_values = []
+            for part, typ in zip(parts, types):
+
+                if units:
+                    clean_part = self.strip_units(part)
+                else:
+                    clean_part = part
+
+                parsed_values.append(typ(clean_part))
+
+            return tuple(parsed_values)
+        
+        except (ValueError, IndexError) as e:
+            print(f"Errore nella conversione della lettura: '{raw_value}'. Dettagli: {e}")
+            return None
+
+    # -- inizializza lo strumento per leggere una grandezza e i tempi di acquisizione, senza unità di misura --
+
+    def configure_reading(self, func="CURR:DC"):
+        """Configura la funzione di misura del Keithley (es. corrente DC o resistenza)"""
+        cmd = self._build_command("configure_reading", {"FUNC": func})
+        self.send_command(cmd)
+        self.reading_func = func
+ 
+    def init_current_reading(self, auto_range=True, output=True, source_voltage=0.1, reset=True): 
+        """Set up the electrometer in a safe way to read currents."""
+        
+        if reset:
+            self.reset()
+        self.set_zero_check(True)
+        self.configure_reading(func="CURR:DC")
+        self.set_zero_check(False)
+        self.set_format_elements()
+        self.reset_time()
+        self.set_autorange(func="CURR:DC", state=auto_range)
+        self.set_source_voltage(source_voltage)
+        self.set_output(output)
+
+    def init_resistance_reading(self, auto_range=True, output=True, source_voltage=1.0, reset=True):
+        """Set up the electrometer in a safe way to read resistances."""
+        
+        if reset:
+            self.reset()
+        self.set_zero_check(True)
+        self.configure_reading(func="RES")
+        self.set_zero_check(False)
+        self.set_format_elements()
+        self.reset_time()
+        self.set_autorange(func="RES", state=auto_range)
+        self.set_source_voltage(source_voltage)
+        self.set_output(output)
+    
+    def init_voltage_reading(self, auto_range=True, output=True, reset=True):
+        """Set up the electrometer in a safe way to read voltages."""
+        
+        if reset:
+            self.reset()
+        self.set_zero_check(True)
+        self.configure_reading(func="VOLT:DC")
+        self.set_zero_check(False)
+        self.set_format_elements()
+        self.reset_time()
+        self.set_autorange(func="VOLT:DC", state=auto_range)
+        self.set_output(output)
+
+    # -- metodi per lettura continua in thread in background --
+
+    def _continuous_read(self):
+        """Loop di lettura continua che popola buffer valori e tempi."""
+        
+        while self.reading:
+            raw = self.read()
+
+            vals = self.parse_reading(raw, types=(float, float), units=False) # types è una tupla che specifica i tipi di dato attesi per ciascuna parte della lettura, in questo caso un float per il valore e un float per il timestamp
+            times = vals[-1] if vals else time.time() # se la lettura è valida, prendi il timestamp restituito dal Keithley, altrimenti usa il timestamp corrente del PC
+
+            self.read_buffer.append(vals[0]) # aggiungi i valori misurati al buffer di lettura
+            self.time_buffer.append(times) # aggiungi i timestamp al buffer dei tempi
+
+            time.sleep(0.1)
+
+    def start_continuous_read(self):
+        """Avvia il thread di lettura continua dal Keithley."""
+        if self.read_thread is None or not self.read_thread.is_alive():
+            self.reading = True
+            self.read_thread = threading.Thread(target=self._continuous_read)
+            self.read_thread.daemon = True
+            self.read_thread.start()
+
+    def stop_continuous_read(self):
+        """Ferma la lettura continua e riporta lo strumento in stato sicuro."""
+        self.reading = False
+
+        if self.read_thread is not None:
+            self.read_thread.join()
+        
+        self.set_output(False)
+        self.set_zero_check(True)
+    
+    # -- chiusura pulita del driver --
+
+    def close(self):
+        """Chiude il driver interrompendo prima la lettura continua."""
         self.stop_continuous_read()
-        if self.ser.is_open:
-            self.ser.close()
+        super().close()
+
+    def __del__(self):
+        """Assicura la chiusura pulita del driver alla distruzione dell'istanza."""
+        self.close()
+
+
+class DummyElettrometroKeithley(ElettrometroKeithley):
+    """Versione dummy del Keithley 6517A per test senza hardware."""
+
+    def __init__(self, samples=None):
+        super().__init__(port=None, baudrate=9600, timeout=0)
+
+        self._dummy_zero_check = True
+        self._dummy_output = False
+        self._dummy_source_voltage = 0.0
+        self._dummy_autorange = {"CURR:DC": True, "RES": True, "VOLT:DC": True}
+        self._dummy_manual_range = {}
+        self._dummy_format = "READ,TST"
+
+        self._dummy_t0 = time.time()
+        self._dummy_samples = list(samples) if samples is not None else [1e-9]
+        self._dummy_sample_idx = 0
+
+    def set_dummy_samples(self, samples):
+        """Aggiorna la sequenza di campioni usata da ``read()``."""
+        self._dummy_samples = list(samples)
+        self._dummy_sample_idx = 0
+
+    def _next_dummy_sample(self):
+        if not self._dummy_samples:
+            return 0.0, time.time() - self._dummy_t0
+
+        sample = self._dummy_samples[self._dummy_sample_idx % len(self._dummy_samples)]
+        self._dummy_sample_idx += 1
+
+        if isinstance(sample, str):
+            parsed = self.parse_reading(sample, types=(float, float), units=False)
+            if parsed is not None:
+                return parsed
+            return 0.0, time.time() - self._dummy_t0
+
+        if isinstance(sample, (tuple, list)) and len(sample) >= 2:
+            try:
+                return float(sample[0]), float(sample[1])
+            except (TypeError, ValueError):
+                return 0.0, time.time() - self._dummy_t0
+
+        try:
+            return float(sample), time.time() - self._dummy_t0
+        except (TypeError, ValueError):
+            return 0.0, time.time() - self._dummy_t0
+
+    def identify(self):
+        return "KEITHLEY INSTRUMENTS INC.,MODEL 6517A,DUMMY,0.0"
+
+    def reset(self):
+        self._dummy_zero_check = True
+        self._dummy_output = False
+        self._dummy_source_voltage = 0.0
+        self._dummy_autorange = {"CURR:DC": True, "RES": True, "VOLT:DC": True}
+        self._dummy_manual_range.clear()
+        self._dummy_format = "READ,TST"
+        self._dummy_t0 = time.time()
+        self._dummy_sample_idx = 0
+        self.read_buffer.clear()
+        self.time_buffer.clear()
+
+    def set_zero_check(self, state: bool):
+        self._dummy_zero_check = bool(state)
+
+    def set_source_voltage(self, voltage):
+        self._dummy_source_voltage = float(voltage)
+
+    def set_output(self, state: bool):
+        self._dummy_output = bool(state)
+
+    def set_autorange(self, func="CURR:DC", state=True):
+        self._dummy_autorange[func] = bool(state)
+
+    def set_manual_range(self, func="CURR:DC", range_val=1e-6):
+        self._dummy_manual_range[func] = float(range_val)
+
+    def set_format_elements(self, format_str="READ,TST"):
+        self._dummy_format = str(format_str)
+
+    def reset_time(self):
+        self._dummy_t0 = time.time()
+
+    def query_zero_check(self):
+        return int(self._dummy_zero_check)
+
+    def query_autorange(self, func="CURR:DC"):
+        return int(self._dummy_autorange.get(func, True))
+
+    def query_source_voltage(self):
+        return float(self._dummy_source_voltage)
+
+    def configure_reading(self, func="CURR:DC"):
+        self.reading_func = func
+
+    def read(self):
+        value, tst = self._next_dummy_sample()
+        return f"{value},{tst}"
+
+    def read_single(self):
+        """Restituisce una singola lettura dummy come ``(valore, timestamp)``."""
+        return self.parse_reading(self.read(), types=(float, float), units=False)
+
+    def close(self):
+        self.stop_continuous_read()
+
+    def __del__(self):
+        self.close()
+
+
+
+
 
 class Camera:
     """Driver camera con acquisizione continua e gestione ROI circolare."""
@@ -700,7 +1292,7 @@ class Camera:
                 continue
 
             time.sleep(interval)
-    
+
     def start_acquisition(self, center_x, center_y, radius, interval=0.1):
         """Avvia acquisizione continua costruendo reference image e ROI.
 
@@ -773,302 +1365,7 @@ class Camera:
 
         return images, timestamps
 
-class SCPIInstrument:
-    """
-        Representation of a generic SCPI instrument communicating via PySerial.
-    """
 
-    commands = {
-        "identify": "*IDN?",
-        "reset": "*RST",
-        "clear": "*CLS",
-        "operation_complete" : "*OPC"
-    }
-    
-    def __init__(self, port, baudrate=9600, timeout=2, terminator='\r\n'):
-        """Inizializza connessione seriale SCPI.
-
-        Args:
-            port (str): Porta seriale strumento.
-            baudrate (int): Baudrate seriale.
-            timeout (float): Timeout lettura/scrittura seriale in secondi.
-            terminator (str): Terminatore comandi SCPI.
-        """
-
-        self.port = port
-        self.baudrate = baudrate
-        self.timeout = timeout
-        self.terminator = terminator
-        
-        # Init the serial connection
-        self.serial = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
-        self.sio = io.TextIOWrapper(io.BufferedRWPair(self.serial, self.serial),newline=terminator)
-        self.reset_buffers()
-
-    def reset_buffers(self):
-        """Reset internal buffers"""
-        self.serial.reset_input_buffer()
-        self.serial.reset_output_buffer()
-
-    def send_command(self, command):
-        """Sends a raw SCPI command (automatically appends the terminator)."""
-        complete_command = f"{command}{self.terminator}"
-        self.serial.write(complete_command.encode('ascii'))
-        time.sleep(0.1)  # breve pausa per assicurarsi che il comando sia inviato prima di procedere
-
-    def query(self, command, delay=0.1):
-        """Sends a query and reads the instrument's response."""
-        self.send_command(command)
-        time.sleep(delay)
-        response = self.serial.readline().decode('ascii', errors='ignore').strip()
-        #response = self.sio.readline()
-        # con readline(), dopo la lettura di una misura, il buffer del pc la elimina (non usiamo il buffer del keithley grazie alla funzione READ?)
-        
-        #print(f"Query: {command} -> Response: {response.strip()}")
-
-        # decode and clean up the response
-        return response#response.decode('ascii', errors='ignore').strip()
-
-    def identify(self):
-        """Sends a universal SCPI command to identify the instrument."""
-        return self.query(command=self.commands["identify"])
-
-    def reset(self):
-        """Sends a universal SCPI command to reset the instrument to factory defaults."""
-        self.send_command(self.commands["reset"])
-        self.send_command(self.commands["clear"])
-        self.send_command(self.commands["operation_complete"])
-
-    def close(self):
-        """Sends a command to close the communication cleanly."""
-        if self.serial.is_open:
-            self.serial.close()
-
-class ElettrometroKeithley(SCPIInstrument):
-    """Implementation for the Keithley 6517A."""
-
-    # specific SCPI commands for the Keithley 6517A
-    commands = {
-        # sets the state of the zero check relay (1 for on, 0 for off) and queries its state
-        "zero_check_on": "SYST:ZCH {state}",
-        "query_zero_check" : "SYST:ZCH?",
-
-        # configures the measurment function of the electrometer to measure current (DC) or resistance, and queries the current configuration
-        "configure_reading": "CONF:{FUNC}",
-
-        # sets the formats for the returned data, removing units and including reading and timestamp in the output
-        "format_elements": "FORM:ELEM READ,TST",
-
-        # resets the internal timer
-        "reset_time": "SYST:TST:REL:RES",
-
-        # sets the voltage level for sourcing (in volts), queries the current voltage level and enable/disable the output
-        "specify_voltage": ":SOUR:VOLT:LEV:IMM:AMPL {voltage}",
-        "enable_output": "OUTP:STAT {state}",
-
-        # sets the range to auto and queries the state of auto-ranging
-        "set_current_range": ":SENS:{FUNC}:RANG:UPP {range}",
-        "query_autorange": ":SENS:{FUNC}:RANG:AUTO?",
-        "set_autorange": ":SENS:{FUNC}:RANG:AUTO {state}"    
-        
-    }
-    
-    def __init__(self, port, baudrate=9600, timeout=2):
-        """Inizializza driver Keithley e buffer di lettura continua.
-
-        Args:
-            port (str): Porta seriale strumento.
-            baudrate (int): Baudrate seriale.
-            timeout (float): Timeout operazioni seriali.
-        """
-        # create a serial connection with the correct terminator for the Keithley (typically \r\n)
-        super().__init__(port, baudrate, timeout, terminator='\r\n')
-
-        # combine the base class commands with the Keithley-specific commands
-        self.commands = {**SCPIInstrument.commands, **self.__class__.commands}
-        
-        self.read_buffer = deque()
-        self.time_buffer = deque()
-        self.read_thread = None
-        self.reading = False
-
-        self.reading_func = None
-    
-    def _build_command(self, command, args):
-        """Costruisce una stringa SCPI formattando il template comando.
-
-        Args:
-            command (str): Chiave comando in ``self.commands``.
-            args (dict[str, object]): Parametri di sostituzione del template.
-
-        Returns:
-            str: Comando SCPI pronto da inviare.
-        """
-        completed_command = self.commands[command].format(**args)
-        return completed_command
-
-    # -- methods for the commands specific to the Keithley 6517A --
-
-    def set_zero_check(self, state: bool):
-        """Attiva (True) o disattiva (False) lo Zero Check."""
-        cmd = self._build_command("zero_check_on", {"state": int(state)})
-        self.send_command(cmd)
-
-    def set_source_voltage (self, voltage):
-        """Imposta la tensione della sorgente del Keithley.
-
-        Args:
-            voltage (float): Tensione target in volt.
-        """
-        command = self._build_command("specify_voltage", {"voltage": voltage})
-        self.send_command(command)
-
-    def set_output(self, state: bool):
-        """Abilita (True) o disabilita (False) l'output del Keithley."""
-        cmd = self._build_command("enable_output", {"state": int(state)})
-        self.send_command(cmd)
-    
-    def configure_reading(self, func="CURR:DC"):
-        """Configura la funzione di misura del Keithley (es. corrente DC o resistenza)"""
-        cmd = self._build_command("configure_reading", {"FUNC": func})
-        self.send_command(cmd)
-        self.reading_func = func
-    
-    def set_autorange(self, func="CURR:DC", state=True):
-        """Abilita (True) o disabilita (False) l'autorange per la funzione di misura specificata."""
-        cmd = self._build_command("set_autorange", {"FUNC": func, "state": int(state)})
-        self.send_command(cmd)
-    
-    def set_manual_range(self, func="CURR:DC", range_val=1e-6):
-        """Imposta manualmente il range di misura per la funzione specificata (es. 1e-6 A per la corrente)."""
-        cmd = self._build_command("set_current_range", {"FUNC": func, "range": range_val})
-        self.send_command(cmd)
-
-    def set_format_elements(self):
-        """Configura il formato degli elementi restituiti nelle letture (es. solo valore e timestamp, senza unità)."""
-        self.send_command(self.commands["format_elements"])
-
-    def reset_time(self):
-        """Azzera il timer interno del Keithley, utile per avere un riferimento temporale nelle letture."""
-        self.send_command(self.commands["reset_time"])
-
-    # -- methods for querying and reading data --
-
-    def query_zero_check(self):
-        """Restituisce lo stato attuale dello Zero Check (1 per attivo, 0 per inattivo)."""
-        response = self.query(self.commands["query_zero_check"])
-        try:
-            return int(response)
-        except ValueError:
-            print(f"Errore nella conversione della risposta dello Zero Check: '{response}'")
-            return None
-    
-    def query_autorange(self, func="CURR:DC"):
-        """Restituisce lo stato attuale dell'autorange per la funzione specificata (1 per attivo, 0 per inattivo)."""
-        cmd = self._build_command("query_autorange", {"FUNC": func})
-        response = self.query(cmd)
-        try:
-            return int(response)
-        except ValueError:
-            print(f"Errore nella conversione della risposta dell'autorange: '{response}'")
-            return None
-    
-    def query_source_voltage(self):
-        """Restituisce il livello di tensione attualmente impostato per la sorgente."""
-        cmd = self._build_command("specify_voltage", {"voltage": ""})[:-1] + "?"
-        response = self.query(cmd)
-        try:
-            return float(response)
-        except ValueError:
-            print(f"Errore nella conversione della risposta del livello di tensione: '{response}'")
-            return None
-
-    def get_fresh_reading(self):
-        """Invia READ? e restituisce la stringa grezza senza toccare i relè."""
-        return self.query("READ?") #query usa readline()
-
-    def strip_units(self, value_str):
-        """Rimuove caratteri alfabetici da una stringa di misura.
-
-        Args:
-            value_str (str): Valore raw eventualmente contenente unita.
-
-        Returns:
-            str: Stringa ripulita da lettere e spazi laterali.
-        """
-        alphabet = list("abcdefghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
-        for char in alphabet:
-            value_str = value_str.replace(char, '')
-        return value_str.strip()
-    
-    def parse_resistance_reading(self, raw_value):
-        """Funzione di utility per pulire i dati (da chiamare nel ciclo)."""
-        try:
-            raw_value = raw_value.strip()
-            #raw_value = self.strip_units(raw_value)
-            parts = raw_value.split(',')
-            res_val = float(parts[0])
-            time_val = float(parts[1])
-            return res_val, time_val
-            """parts = raw_value.split(',')
-            res_val = float(self.strip_units(parts[0]))
-            time_val = float(self.strip_units(parts[1]))
-            return res_val, time_val"""
-        except (ValueError, IndexError):
-            return None, None
-
-    def init_current_reading(self): 
-        """Set up the electrometer in a safe way to read currents."""
-        
-        self.reset()
-        self.set_zero_check(False)
-        self.configure_reading(func="CURR:DC")
-        self.set_format_elements()
-        self.reset_time()
-        self.set_autorange(func="CURR:DC", state=True)
-        self.set_source_voltage(0.1)
-        self.set_output(True)
-
-    def init_resistance_reading(self):
-        """Prepara l'elettrometro per misurare resistenza e tempo, verificando se il relè è disattivo per poter iniziare a misurare."""
-        
-        self.reset()
-        self.set_zero_check(False)
-        self.configure_reading(func="RES")
-        self.set_format_elements()
-        self.reset_time()
-        self.set_autorange(func="RES", state=True)
-            
-    def _continuous_read(self):
-        """Loop di lettura continua che popola buffer valori e tempi."""
-        
-        while self.reading:
-            raw = self.get_fresh_reading()
-            current, t = self.parse_resistance_reading(raw)
-            self.read_buffer.append(current)
-            self.time_buffer.append(t)
-            time.sleep(0.1)
-            
-    def start_continuous_read(self):
-        """Avvia il thread di lettura continua dal Keithley."""
-        if self.read_thread is None or not self.read_thread.is_alive():
-            self.reading = True
-            self.read_thread = threading.Thread(target=self._continuous_read)
-            self.read_thread.daemon = True
-            self.read_thread.start()
-            
-    def stop_continuous_read(self):
-        """Ferma la lettura continua e riporta lo strumento in stato sicuro."""
-        self.reading = False
-        if self.read_thread is not None:
-            self.read_thread.join()
-        self.set_output(False)
-        self.set_zero_check(True) # Rimettiamo lo zero check per sicurezza
-        
-    def close(self):
-        """Chiude il driver interrompendo prima la lettura continua."""
-        self.stop_continuous_read()
-        super().close()
 
 
 # Collega documentazione protocollo esterna alle classi (visibile in pdoc).
