@@ -1365,7 +1365,302 @@ class Camera:
 
         return images, timestamps
 
+class SCPIInstrument:
+    """
+        Representation of a generic SCPI instrument communicating via PySerial.
+    """
 
+    commands = {
+        "identify": "*IDN?",
+        "reset": "*RST",
+        "clear": "*CLS",
+        "operation_complete" : "*OPC"
+    }
+    
+    def __init__(self, port, baudrate=9600, timeout=2, terminator='\r\n'):
+        """Inizializza connessione seriale SCPI.
+
+        Args:
+            port (str): Porta seriale strumento.
+            baudrate (int): Baudrate seriale.
+            timeout (float): Timeout lettura/scrittura seriale in secondi.
+            terminator (str): Terminatore comandi SCPI.
+        """
+
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.terminator = terminator
+        
+        # Init the serial connection
+        self.serial = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+        self.sio = io.TextIOWrapper(io.BufferedRWPair(self.serial, self.serial),newline=terminator)
+        self.reset_buffers()
+
+    def reset_buffers(self):
+        """Reset internal buffers"""
+        self.serial.reset_input_buffer()
+        self.serial.reset_output_buffer()
+
+    def send_command(self, command):
+        """Sends a raw SCPI command (automatically appends the terminator)."""
+        complete_command = f"{command}{self.terminator}"
+        self.serial.write(complete_command.encode('ascii'))
+        time.sleep(0.1)  # breve pausa per assicurarsi che il comando sia inviato prima di procedere
+
+    def query(self, command, delay=0.1):
+        """Sends a query and reads the instrument's response."""
+        self.send_command(command)
+        time.sleep(delay)
+        response = self.serial.readline().decode('ascii', errors='ignore').strip()
+        #response = self.sio.readline()
+        # con readline(), dopo la lettura di una misura, il buffer del pc la elimina (non usiamo il buffer del keithley grazie alla funzione READ?)
+        
+        #print(f"Query: {command} -> Response: {response.strip()}")
+
+        # decode and clean up the response
+        return response#response.decode('ascii', errors='ignore').strip()
+
+    def identify(self):
+        """Sends a universal SCPI command to identify the instrument."""
+        return self.query(command=self.commands["identify"])
+
+    def reset(self):
+        """Sends a universal SCPI command to reset the instrument to factory defaults."""
+        self.send_command(self.commands["reset"])
+        self.send_command(self.commands["clear"])
+        self.send_command(self.commands["operation_complete"])
+
+    def close(self):
+        """Sends a command to close the communication cleanly."""
+        if self.serial.is_open:
+            self.serial.close()
+
+class ElettrometroKeithley(SCPIInstrument):
+    """Implementation for the Keithley 6517A."""
+
+    # specific SCPI commands for the Keithley 6517A
+    commands = {
+        # sets the state of the zero check relay (1 for on, 0 for off) and queries its state
+        "zero_check_on": "SYST:ZCH {state}",
+        "query_zero_check" : "SYST:ZCH?",
+
+        # configures the measurment function of the electrometer to measure current (DC) or resistance, and queries the current configuration
+        "configure_reading": "CONF:{FUNC}",
+
+        # sets the formats for the returned data, removing units and including reading and timestamp in the output
+        "format_elements": "FORM:ELEM READ,TST",
+
+        # resets the internal timer
+        "reset_time": "SYST:TST:REL:RES",
+
+        # sets the voltage level for sourcing (in volts), queries the current voltage level and enable/disable the output
+        "specify_voltage": ":SOUR:VOLT:LEV:IMM:AMPL {voltage}",
+        "enable_output": "OUTP:STAT {state}",
+
+        # sets the range to auto and queries the state of auto-ranging
+        "set_current_range": ":SENS:{FUNC}:RANG:UPP {range}",
+        "query_autorange": ":SENS:{FUNC}:RANG:AUTO?",
+        "set_autorange": ":SENS:{FUNC}:RANG:AUTO {state}"    
+        
+    }
+    
+    def __init__(self, port, baudrate=9600, timeout=2):
+        """Inizializza driver Keithley e buffer di lettura continua.
+
+        Args:
+            port (str): Porta seriale strumento.
+            baudrate (int): Baudrate seriale.
+            timeout (float): Timeout operazioni seriali.
+        """
+        # create a serial connection with the correct terminator for the Keithley (typically \r\n)
+        super().__init__(port, baudrate, timeout, terminator='\r\n')
+
+        # combine the base class commands with the Keithley-specific commands
+        self.commands = {**SCPIInstrument.commands, **self.__class__.commands}
+        
+        self.read_buffer = deque()
+        self.time_buffer = deque()
+        self.read_thread = None
+        self.reading = False
+
+        self.reading_func = None
+    
+    def _build_command(self, command, args):
+        """Costruisce una stringa SCPI formattando il template comando.
+
+        Args:
+            command (str): Chiave comando in ``self.commands``.
+            args (dict[str, object]): Parametri di sostituzione del template.
+
+        Returns:
+            str: Comando SCPI pronto da inviare.
+        """
+        completed_command = self.commands[command].format(**args)
+        return completed_command
+
+    # -- methods for the commands specific to the Keithley 6517A --
+
+    def set_zero_check(self, state: bool):
+        """Attiva (True) o disattiva (False) lo Zero Check."""
+        cmd = self._build_command("zero_check_on", {"state": int(state)})
+        self.send_command(cmd)
+
+    def set_source_voltage (self, voltage):
+        """Imposta la tensione della sorgente del Keithley.
+
+        Args:
+            voltage (float): Tensione target in volt.
+        """
+        command = self._build_command("specify_voltage", {"voltage": voltage})
+        self.send_command(command)
+
+    def set_output(self, state: bool):
+        """Abilita (True) o disabilita (False) l'output del Keithley."""
+        cmd = self._build_command("enable_output", {"state": int(state)})
+        self.send_command(cmd)
+    
+    def configure_reading(self, func="CURR:DC"):
+        """Configura la funzione di misura del Keithley (es. corrente DC o resistenza)"""
+        cmd = self._build_command("configure_reading", {"FUNC": func})
+        self.send_command(cmd)
+        self.reading_func = func
+    
+    def set_autorange(self, func="CURR:DC", state=True):
+        """Abilita (True) o disabilita (False) l'autorange per la funzione di misura specificata."""
+        cmd = self._build_command("set_autorange", {"FUNC": func, "state": int(state)})
+        self.send_command(cmd)
+    
+    def set_manual_range(self, func="CURR:DC", range_val=1e-6):
+        """Imposta manualmente il range di misura per la funzione specificata (es. 1e-6 A per la corrente)."""
+        cmd = self._build_command("set_current_range", {"FUNC": func, "range": range_val})
+        self.send_command(cmd)
+
+    def set_format_elements(self):
+        """Configura il formato degli elementi restituiti nelle letture (es. solo valore e timestamp, senza unità)."""
+        self.send_command(self.commands["format_elements"])
+
+    def reset_time(self):
+        """Azzera il timer interno del Keithley, utile per avere un riferimento temporale nelle letture."""
+        self.send_command(self.commands["reset_time"])
+
+    # -- methods for querying and reading data --
+
+    def query_zero_check(self):
+        """Restituisce lo stato attuale dello Zero Check (1 per attivo, 0 per inattivo)."""
+        response = self.query(self.commands["query_zero_check"])
+        try:
+            return int(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta dello Zero Check: '{response}'")
+            return None
+    
+    def query_autorange(self, func="CURR:DC"):
+        """Restituisce lo stato attuale dell'autorange per la funzione specificata (1 per attivo, 0 per inattivo)."""
+        cmd = self._build_command("query_autorange", {"FUNC": func})
+        response = self.query(cmd)
+        try:
+            return int(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta dell'autorange: '{response}'")
+            return None
+    
+    def query_source_voltage(self):
+        """Restituisce il livello di tensione attualmente impostato per la sorgente."""
+        cmd = self._build_command("specify_voltage", {"voltage": ""})[:-1] + "?"
+        response = self.query(cmd)
+        try:
+            return float(response)
+        except ValueError:
+            print(f"Errore nella conversione della risposta del livello di tensione: '{response}'")
+            return None
+
+    def get_fresh_reading(self):
+        """Invia READ? e restituisce la stringa grezza senza toccare i relè."""
+        return self.query("READ?") #query usa readline()
+
+    def strip_units(self, value_str):
+        """Rimuove caratteri alfabetici da una stringa di misura.
+
+        Args:
+            value_str (str): Valore raw eventualmente contenente unita.
+
+        Returns:
+            str: Stringa ripulita da lettere e spazi laterali.
+        """
+        alphabet = list("abcdefghijklmnopqrstuvwxyzABCDFGHIJKLMNOPQRSTUVWXYZ")
+        for char in alphabet:
+            value_str = value_str.replace(char, '')
+        return value_str.strip()
+    
+    def parse_resistance_reading(self, raw_value):
+        """Funzione di utility per pulire i dati (da chiamare nel ciclo)."""
+        try:
+            raw_value = raw_value.strip()
+            #raw_value = self.strip_units(raw_value)
+            parts = raw_value.split(',')
+            res_val = float(parts[0])
+            time_val = float(parts[1])
+            return res_val, time_val
+            """parts = raw_value.split(',')
+            res_val = float(self.strip_units(parts[0]))
+            time_val = float(self.strip_units(parts[1]))
+            return res_val, time_val"""
+        except (ValueError, IndexError):
+            return None, None
+
+    def init_current_reading(self): 
+        """Set up the electrometer in a safe way to read currents."""
+        
+        self.reset()
+        self.set_zero_check(False)
+        self.configure_reading(func="CURR:DC")
+        self.set_format_elements()
+        self.reset_time()
+        self.set_autorange(func="CURR:DC", state=True)
+        self.set_source_voltage(0.1)
+        self.set_output(True)
+
+    def init_resistance_reading(self):
+        """Prepara l'elettrometro per misurare resistenza e tempo, verificando se il relè è disattivo per poter iniziare a misurare."""
+        
+        self.reset()
+        self.set_zero_check(False)
+        self.configure_reading(func="RES")
+        self.set_format_elements()
+        self.reset_time()
+        self.set_autorange(func="RES", state=True)
+            
+    def _continuous_read(self):
+        """Loop di lettura continua che popola buffer valori e tempi."""
+        
+        while self.reading:
+            raw = self.get_fresh_reading()
+            current, t = self.parse_resistance_reading(raw)
+            self.read_buffer.append(current)
+            self.time_buffer.append(t)
+            time.sleep(0.1)
+            
+    def start_continuous_read(self):
+        """Avvia il thread di lettura continua dal Keithley."""
+        if self.read_thread is None or not self.read_thread.is_alive():
+            self.reading = True
+            self.read_thread = threading.Thread(target=self._continuous_read)
+            self.read_thread.daemon = True
+            self.read_thread.start()
+            
+    def stop_continuous_read(self):
+        """Ferma la lettura continua e riporta lo strumento in stato sicuro."""
+        self.reading = False
+        if self.read_thread is not None:
+            self.read_thread.join()
+        self.set_output(False)
+        self.set_zero_check(True) # Rimettiamo lo zero check per sicurezza
+        
+    def close(self):
+        """Chiude il driver interrompendo prima la lettura continua."""
+        self.stop_continuous_read()
+        super().close()
 
 
 # Collega documentazione protocollo esterna alle classi (visibile in pdoc).
