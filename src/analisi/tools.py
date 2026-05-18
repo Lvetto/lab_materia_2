@@ -1,3 +1,11 @@
+"""Utility per analisi congiunta di microbilancia al quarzo e immagini.
+
+Questo modulo raccoglie funzioni per:
+1. allineare timestamp tra segnali da microbilancia e immagini camera;
+2. preprocessare stack di immagini (ROI, medie mobili, differenze);
+3. estrarre feature fotometriche da correlare con spessore/rate misurati.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
@@ -5,32 +13,46 @@ import os
 from math import sqrt
 import time
 import re
-from scipy import signal
-import ipywidgets as widgets
 
 
 # conversione dei timestamp nello stesso formato tra bilancia e immagini (sarebbe il caso di sistemarlo anche nell'interfaccia...)
 
 FORMATO_COMUNE = "%Y-%m-%d %H:%M:%S"
+""" Formato comune per timestamp di bilancia e immagini, usato per allineamento e confronto. """
 
 def bilancia_timestamp_to_common(timestamp_unix, fmt=FORMATO_COMUNE):
-    """
-    Timestamp bilancia (Unix epoch) -> formato comune.
-    Supporta secondi (10 cifre) e millisecondi (13 cifre).
+    """Converte un timestamp Unix della bilancia nel formato comune.
+
+    Args:
+        timestamp_unix (float | int | str): Timestamp in secondi o millisecondi
+            dal Unix epoch.
+        fmt (str): Formato di output usato da ``time.strftime``.
+
+    Returns:
+        str: Timestamp formattato secondo ``fmt``.
     """
     ts = float(timestamp_unix)
     if ts > 1e12:  # il ts è in millisecondi
         ts /= 1000.0 # lo converto in secondi perché le funzioni standard di Python (come time.localtime(ts)) si aspettano il tempo espresso in secondi
     return time.strftime(fmt, time.localtime(ts))
 
-
 def image_timestamp_to_common(image_name_or_timestamp, fmt=FORMATO_COMUNE):
-    """
-    Timestamp immagini -> formato comune.
-    Accetta:
-    - 'frame_YYYYMMDD_HHMMSS.png'
-    - 'YYYYMMDD_HHMMSS'
-    - 'YYYY-MM-DD_HH-MM-SS' (nome cartella sessione)
+    """Converte timestamp da nome file/cartella immagine al formato comune.
+
+    Formati supportati:
+    - ``frame_YYYYMMDD_HHMMSS.png``
+    - ``YYYYMMDD_HHMMSS``
+    - ``YYYY-MM-DD_HH-MM-SS``
+
+    Args:
+        image_name_or_timestamp (str): Nome file o stringa timestamp.
+        fmt (str): Formato di output usato da ``time.strftime``.
+
+    Returns:
+        str: Timestamp normalizzato nel formato comune.
+
+    Raises:
+        ValueError: Se il formato non e riconosciuto.
     """
     s = str(image_name_or_timestamp)
     base = os.path.basename(s)
@@ -52,8 +74,14 @@ def image_timestamp_to_common(image_name_or_timestamp, fmt=FORMATO_COMUNE):
 base_img_folder = "data/raw"
 
 def load_images_from_folder(folder):
-    """
-    Carica tutte le immagini PNG da una cartella, restituendo una lista di immagini e i loro timestamp in formato comune.
+    """Carica tutte le immagini PNG in scala di grigi da una cartella.
+
+    Args:
+        folder (str): Percorso della cartella contenente immagini PNG.
+
+    Returns:
+        tuple[list[np.ndarray], list[str]]: Coppia con immagini caricate e
+            timestamp normalizzati estratti dai nomi file.
     """
     images = []
     timestamps = []
@@ -67,8 +95,14 @@ def load_images_from_folder(folder):
     return images, timestamps
 
 def load_images_from_folders(folders):
-    """
-    Carica immagini da più cartelle, restituendo liste aggregate di immagini e timestamp.
+    """Carica immagini da piu cartelle aggregando output in un unico dataset.
+
+    Args:
+        folders (list[str]): Elenco di cartelle da scandire.
+
+    Returns:
+        tuple[list[np.ndarray], list[str]]: Coppia con immagini aggregate e
+            timestamp normalizzati corrispondenti.
     """
     all_images = []
     all_timestamps = []
@@ -79,8 +113,14 @@ def load_images_from_folders(folders):
     return all_images, all_timestamps
 
 def sort_images_and_timestamps(images, timestamps):
-    """
-    Ordina immagini e timestamp in base ai timestamp.
+    """Ordina immagini e timestamp usando il timestamp come chiave.
+
+    Args:
+        images (list[np.ndarray]): Immagini da ordinare.
+        timestamps (list[str]): Timestamp associati alle immagini.
+
+    Returns:
+        tuple[list[np.ndarray], list[str]]: Immagini e timestamp ordinati.
     """
     combined = list(zip(timestamps, images)) #lista di tuple con l'immagine associata al suo timestamp
     combined.sort(key=lambda x: x[0]) #key fornisce il criterio di ordinamento cronologico rispetto alla prima coppia immagazzinata
@@ -91,8 +131,17 @@ def sort_images_and_timestamps(images, timestamps):
 # carica timestamp, rate, thickness dalla bilancia
 
 def load_bilancia_data(file_path):
-    """
-    Carica dati dalla bilancia, restituendo liste di timestamp (formato comune), rate e thickness.
+    """Carica dati tabulati della microbilancia da file di testo.
+
+    Ogni riga valida e attesa nel formato:
+    ``timestamp<TAB>rate<TAB>thickness``.
+
+    Args:
+        file_path (str): Percorso del file dati.
+
+    Returns:
+        tuple[list[str], list[float], list[float]]: Timestamp normalizzati,
+            rate e spessori.
     """
     timestamps = []
     rates = []
@@ -110,8 +159,19 @@ def load_bilancia_data(file_path):
     return timestamps, rates, thicknesses
 
 def extract_common_timestamp_points(image_timestamps, bilancia_timestamps, max_diff_seconds=1.0):
-    """
-    Trova timestamp comuni tra immagini e bilancia, restituendo indici corrispondenti.
+    """Trova coppie immagine-bilancia compatibili temporalmente.
+
+    Per ogni timestamp immagine cerca il primo timestamp bilancia entro una
+    finestra temporale ``max_diff_seconds``.
+
+    Args:
+        image_timestamps (list[str]): Timestamp immagini nel formato comune.
+        bilancia_timestamps (list[str]): Timestamp bilancia nel formato comune.
+        max_diff_seconds (float): Scarto massimo accettato in secondi.
+
+    Returns:
+        tuple[list[int], list[int]]: Indici corrispondenti in
+            ``image_timestamps`` e ``bilancia_timestamps``.
     """
     common_image_indices = []
     common_bilancia_indices = []
@@ -132,9 +192,16 @@ def extract_common_timestamp_points(image_timestamps, bilancia_timestamps, max_d
     return common_image_indices, common_bilancia_indices
 
 def interpolate_timestamps(image_timestamps, bilancia_timestamps, bilancia_values):
-    """
-    Interpola i valori della bilancia per i timestamp delle immagini.
-    Restituisce una lista di valori interpolati corrispondenti ai timestamp delle immagini.
+    """Interpola valori bilancia sui timestamp delle immagini.
+
+    Args:
+        image_timestamps (list[str]): Timestamp immagini nel formato comune.
+        bilancia_timestamps (list[str]): Timestamp bilancia nel formato comune.
+        bilancia_values (list[float] | np.ndarray): Valori associati ai
+            timestamp bilancia (es. rate o spessore).
+
+    Returns:
+        np.ndarray: Valori interpolati sui timestamp immagini.
     """
     image_seconds = [time.mktime(time.strptime(ts, FORMATO_COMUNE)) for ts in image_timestamps]
     bilancia_seconds = [time.mktime(time.strptime(ts, FORMATO_COMUNE)) for ts in bilancia_timestamps]
@@ -143,8 +210,14 @@ def interpolate_timestamps(image_timestamps, bilancia_timestamps, bilancia_value
     return interpolated_values
 
 def moving_average_images(images, window_size):
-    """
-    Applica una media mobile alle immagini, restituendo una nuova lista di immagini filtrate.
+    """Applica media mobile uniforme a una sequenza di immagini.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini in ingresso.
+        window_size (int): Ampiezza della finestra mobile.
+
+    Returns:
+        list[np.ndarray]: Sequenza filtrata.
     """
 
     if window_size == 1:
@@ -164,10 +237,16 @@ def moving_average_images(images, window_size):
 
     return moving_avg_imgs
 
-
 def moving_average_images_gaussian_weights(images, window_size, sigma):
-    """
-    applica una media mobile alle immagini, dove ognuna è moltiplicata per un peso gaussiano
+    """Applica media mobile pesata con kernel gaussiano.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini in ingresso.
+        window_size (int): Ampiezza della finestra mobile.
+        sigma (float): Deviazione standard del kernel gaussiano.
+
+    Returns:
+        list[np.ndarray]: Sequenza filtrata con pesi gaussiani.
     """
 
     if window_size == 1:
@@ -199,10 +278,16 @@ def moving_average_images_gaussian_weights(images, window_size, sigma):
 
     return moving_avg_imgs
 
-
 def extract_roi_from_images(images, roi_center, roi_radius):
-    """
-    Estrae una regione di interesse (ROI) circolare da ogni immagine, restituendo una lista di immagini ROI.
+    """Estrae una ROI circolare da ciascuna immagine.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini in ingresso.
+        roi_center (tuple[int, int]): Centro ROI in coordinate pixel ``(x, y)``.
+        roi_radius (int): Raggio ROI in pixel.
+
+    Returns:
+        list[np.ndarray]: Immagini mascherate con sola ROI.
     """
     roi_images = []
 
@@ -218,8 +303,14 @@ def extract_roi_from_images(images, roi_center, roi_radius):
     return roi_images
 
 def compute_difference_from_reference(images, reference_image):
-    """
-    Calcola la differenza assoluta tra ogni immagine e un'immagine di riferimento, restituendo una lista di immagini differenza.
+    """Calcola differenza assoluta rispetto a una immagine di riferimento.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini da confrontare.
+        reference_image (np.ndarray): Immagine di riferimento.
+
+    Returns:
+        list[np.ndarray]: Immagini differenza assoluta.
     """
     difference_images = []
 
@@ -230,8 +321,13 @@ def compute_difference_from_reference(images, reference_image):
     return difference_images
 
 def compute_average_intensity(images):
-    """
-    Calcola l'intensità media di ogni immagine, restituendo una lista di valori di intensità media.
+    """Calcola l'intensita media per ogni immagine.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini.
+
+    Returns:
+        list[float]: Intensita medie per frame.
     """
     avg_intensities = []
 
@@ -242,9 +338,21 @@ def compute_average_intensity(images):
     return avg_intensities
 
 def extract_line_profile_np(image, x0, y0, x1, y1, num_samples=None):
-    """
-    Estrae i valori lungo il segmento tra due punti con campionamento uniforme.
-    Restituisce un array 1D di lunghezza fissa, gli elementi rappresentano la luminosità incontrata.
+    """Estrae un profilo di intensita lungo un segmento con interpolazione.
+
+    Usa interpolazione bilineare su campionamento uniforme tra i due estremi.
+
+    Args:
+        image (np.ndarray): Immagine sorgente.
+        x0 (float): Coordinata x del punto iniziale.
+        y0 (float): Coordinata y del punto iniziale.
+        x1 (float): Coordinata x del punto finale.
+        y1 (float): Coordinata y del punto finale.
+        num_samples (int | None): Numero di campioni lungo il segmento. Se
+            ``None`` viene usata la lunghezza geometrica del segmento + 1.
+
+    Returns:
+        np.ndarray: Profilo 1D di intensita.
     """
     if num_samples is None:
         num_samples = int(np.hypot(x1 - x0, y1 - y0)) + 1 # il +1 per risolvere il "fencepost error"
@@ -272,13 +380,33 @@ def extract_line_profile_np(image, x0, y0, x1, y1, num_samples=None):
     ) # ciascun elemento è una media pesata delle coordinate dei 4 pixel più vicini al punto campionato, con pesi che dipendono dalla distanza del punto campionato da ciascuno di questi pixel (dx e dy)
 
 def extract_line_profiles_np(images, x0, y0, x1, y1, num_samples=None):
+    """Estrae lo stesso profilo lineare da una sequenza di immagini.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini.
+        x0 (float): Coordinata x del punto iniziale.
+        y0 (float): Coordinata y del punto iniziale.
+        x1 (float): Coordinata x del punto finale.
+        y1 (float): Coordinata y del punto finale.
+        num_samples (int | None): Numero di campioni per profilo.
+
+    Returns:
+        list[np.ndarray]: Lista di profili, uno per immagine.
+    """
     return [extract_line_profile_np(img, x0, y0, x1, y1, num_samples) for img in images]
 
-
 def extract_line_profiles_circle_np(images, center, radius, num_profiles=10, num_samples=None):
-    """
-    Estrae num_profiles profili lungo diametri della circonferenza.
-    Tutti i profili hanno la stessa lunghezza.
+    """Estrae profili lungo diametri distribuiti su una circonferenza.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini.
+        center (tuple[float, float]): Centro della circonferenza ``(x, y)``.
+        radius (float): Raggio della circonferenza.
+        num_profiles (int): Numero di diametri/profili per immagine.
+        num_samples (int | None): Numero campioni per singolo profilo.
+
+    Returns:
+        np.ndarray: Array con shape ``(n_immagini, num_profiles, n_samples)``.
     """
     angles = np.linspace(0, 2 * np.pi, num_profiles, endpoint=False)
     all_profiles = []
@@ -302,9 +430,17 @@ def extract_line_profiles_circle_np(images, center, radius, num_profiles=10, num
     return np.stack(all_profiles, axis=0)
 
 def extract_average_line_profile_circle_np(images, center, radius, num_profiles=10):
-    """
-    Estrae i line profile lungo diametri di una circonferenza definita da un centro e un raggio, restituendo un array di profili medi.
-    Usa la versione numpy dell'estrazione dei line profile.
+    """Calcola il profilo medio su diametri di una circonferenza.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini.
+        center (tuple[float, float]): Centro della circonferenza ``(x, y)``.
+        radius (float): Raggio della circonferenza.
+        num_profiles (int): Numero di diametri/profili per immagine.
+
+    Returns:
+        np.ndarray | None: Profilo medio per diametro, o ``None`` quando non
+            sono disponibili profili.
     """
 
     line_profiles = extract_line_profiles_circle_np(images, center, radius, num_profiles)
@@ -312,8 +448,16 @@ def extract_average_line_profile_circle_np(images, center, radius, num_profiles=
     return avg_line_profiles
 
 def extract_line_profiles_circle(images, center, radius, num_profiles=10):
-    """
-    Estrae i line profile lungo diametri di una circonferenza definita da un centro e un raggio, restituendo una lista di array di profili.
+    """Estrae profili discreti su diametri senza interpolazione.
+
+    Args:
+        images (list[np.ndarray]): Sequenza immagini.
+        center (tuple[int, int]): Centro della circonferenza ``(x, y)``.
+        radius (int): Raggio della circonferenza.
+        num_profiles (int): Numero di diametri/profili per immagine.
+
+    Returns:
+        list[list[np.ndarray]]: Profili raggruppati per immagine.
     """
 
     line_profiles = []
@@ -334,7 +478,14 @@ def extract_line_profiles_circle(images, center, radius, num_profiles=10):
 
 
 class RoiSelectorWidget:
+    """Widget interattivo per selezionare una ROI circolare su un'immagine."""
+
     def __init__(self, image):
+        """Inizializza il widget e registra callback mouse.
+
+        Args:
+            image (np.ndarray): Immagine su cui selezionare la ROI.
+        """
         self.image = image
         self.roi_center = (image.shape[1] // 2, image.shape[0] // 2)
         self.roi_radius = min(image.shape) // 4
@@ -351,6 +502,11 @@ class RoiSelectorWidget:
         self.draw()
 
     def on_click(self, event):
+        """Gestisce click mouse per spostare/ridimensionare la ROI.
+
+        Args:
+            event (matplotlib.backend_bases.MouseEvent): Evento mouse.
+        """
         # se tasto sinistro, cambia il centro
         if event.button == 1:
             self.roi_center = (int(event.xdata), int(event.ydata))
@@ -364,14 +520,20 @@ class RoiSelectorWidget:
             self.update_circle()
 
     def update_circle(self):
+        """Aggiorna geometria della ROI disegnata sul canvas."""
         self.circle.center = self.roi_center
         self.circle.radius = self.roi_radius
         self.fig.canvas.draw()
     
     def draw(self):
+        """Mostra la figura associata al widget."""
         self.fig.show()
     
     @property
     def roi(self):
-        return self.roi_center, self.roi_radius
+        """Restituisce stato corrente della ROI.
 
+        Returns:
+            tuple[tuple[int, int], int]: Centro ``(x, y)`` e raggio in pixel.
+        """
+        return self.roi_center, self.roi_radius

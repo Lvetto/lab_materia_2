@@ -1,44 +1,55 @@
 # Laboratorio di Fisica della Materia 2
 
-Questa repo contiene tutte le risorse, i dati e il codice relativi al laboratorio di Fisica della Materia 2.
+Repository per acquisizione e analisi dati del laboratorio (microbilancia al quarzo + camera + elettrometro).
 
-La documentazione del codice è disponibile a [Clicca qui per leggere la documentazione](https://lvetto.github.io/lab_materia_2/lib.html)
+La documentazione del codice è disponibile al [link](https://lvetto.github.io/lab_materia_2/lib.html).
 
 ## Struttura repository
-
-Di seguito è presentata la struttura delle cartelle del progetto e il loro contenuto:
 
 ```text
 .
 ├── data/
-│   ├── processed/
-│   └── raw/
-├── docs/
+├── documents/
 │   ├── notes/
 │   ├── paper/
 │   └── references/
+├── install_scripts/
+│   ├── install_linux.sh
+│   └── install_windows.bat
 ├── interfaces/
 ├── src/
+│   ├── analisi/
+│   └── lib/
 ├── temp/
+├── requirements.txt
+├── setup.py
 └── README.md
 ```
 
-## Descrizione cartelle
+## Contenuto directory
 
-- **data**: contiene tutti i dati raccolti.
-  - **data/raw**: dati grezzi, direttamente dagli strumenti.
-  - **data/processed**: dati elaborati, pronti per l'analisi.
-- **docs**: contiene la documentazione e tutte le risorse raccolte durante il corso, come appunti, manuali e riferimenti bibliografici.
-  - **notes**: appunti e note di laboratorio.
-  - **references**: manuali, codice e risorse esterne utili per il corso.
-  - **paper**: articoli scientifici e pubblicazioni rilevanti per il corso.
-- **interfaces**: include le interfacce software sviluppate per la comunicazione con gli strumenti e la gestione degli esperimenti.
-- **src**: contiene il codice sorgente, organizzato (o in fase di riorganizzazione) come pacchetto Python per l'analisi e l'automazione.
-- **temp**: destinata a file temporanei, script di prova e materiale in corso di lavorazione.
+- `data/`: dati sperimentali (`raw` grezzi, `processed` elaborati).
+- `documents/`: materiale di supporto (note, paper, riferimenti).
+- `install_scripts/`: script di setup ambiente per Linux e Windows.
+- `interfaces/`: notebook/interfacce per controllo strumenti e test acquisizione.
+- `src/lib/`: driver strumenti e interfacce Python riusabili.
+- `src/analisi/`: utility di analisi e correlazione segnali/immagini.
+- `temp/`: prove, prototipi e file temporanei non stabili.
 
-## Cose da fare
+## Installazione rapida
 
-- Finire di documentare il codice aggiungendo i docstring. Seguite la struttura nella bilancia, che vorrei usare pdoc per generare la documentazione in modo automatico.
-- Caricare tutto quello che abbiamo in docs (aggiunti i paper inviati dalla Prof)
-- La camera ha bisogno di un po' di lavoro sulle roi.
-- Le interfacce devono essere riordinate, probabilmente creando una classe base per le finestre che usiamo.
+Gli script creano/riusano un ambiente Python, installano dipendenze e il progetto in editable mode (`pip install -e .`).
+
+### Linux
+
+```bash
+bash install_scripts/install_linux.sh
+```
+
+### Windows
+
+```bat
+install_scripts\install_windows.bat
+```
+
+Su Windows, se `conda` è disponibile viene usato l'ambiente `lab_materia_2`; altrimenti viene creato `.venv` locale.

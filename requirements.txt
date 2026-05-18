@@ -5,3 +5,6 @@ opencv-python
 matplotlib
 ipywidgets
 pyvisa
+ipykernel
+ipympl
+setuptools
