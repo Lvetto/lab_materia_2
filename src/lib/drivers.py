@@ -484,64 +484,6 @@ class Bilancia:
         if self.ser.is_open:
             self.ser.close()
 
-class Bilancia2(Bilancia):
-    """Variante di ``Bilancia`` con lettura pacchetto orientata alla robustezza."""
-
-    def __init__(self, porta, baudrate=9600, dev_addr=1):
-        """Inizializza la variante di driver con API compatibile ``Bilancia``.
-
-        Args:
-            porta (str | None): Porta seriale dello strumento.
-            baudrate (int): Baudrate della connessione seriale.
-            dev_addr (int): Indirizzo dispositivo sul protocollo Maxtek.
-        """
-        super().__init__(porta, baudrate, dev_addr)
-        
-    def get_safe_reading(self):
-        """Legge un pacchetto completo verificando header e checksum.
-
-        Returns:
-            list[str] | None: Valori ASCII decodificati dal payload, oppure
-            ``None`` se il pacchetto e corrotto/non decodificabile.
-        """
-        # cerco l'Header [255, 254]
-        while True:
-            # leggo un byte alla volta finché non trovo l'inizio
-            b = self.ser.read(1)
-            if b == bytes([255]):
-                b2 = self.ser.read(1)
-                if b2 == bytes([254]):
-                    break
-
-        # leggi i 3 byte successivi: address, instr_code, length
-        header_info = self.ser.read(3)
-        addr = header_info[0]
-        instr_code = header_info[1]
-        instr_bytes = bytes([instr_code])
-        length = header_info[2]
-
-        # 3. leggi il corpo del messaggio (data) e il checksum finale
-        payload = self.ser.read(length)
-        received_chk = self.ser.read(1)[0]
-
-        # 4. verifica del checksum
-        calculated_chk_bytes = self.checksum(instr_bytes, payload) #checksum vuole dati in bytes
-        calculated_chk = calculated_chk_bytes[0]
-
-        if received_chk != calculated_chk:
-            print("Errore: Checksum non corrisponde! Pacchetto scartato.")
-            return None
-
-        # 5. Decodifica i dati (se sono ASCII)
-        
-        try:
-            valori_divisi = self.decode_ascii_data(payload, [length])
-            return valori_divisi 
-        except Exception as e:
-            print(f"Errore nella decodifica ASCII: {e}")
-            return None
-   
-
 class Camera:
     """Driver camera con acquisizione continua e gestione ROI circolare."""
 
