@@ -10,13 +10,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import ipywidgets as widgets
 from serial.tools import list_ports
+from collections import deque
 from lib.drivers import *
 from IPython.display import display
 
 class BaseInterface:
     """Classe base per interfacce strumentali con widget e grafici live."""
 
-    def __init__(self):
+    def __init__(self, log_max_lines=10):
         """Inizializza stato condiviso, widget di base e area output."""
         self.fig = None
         self.axes = None
@@ -26,11 +27,28 @@ class BaseInterface:
         
         
         self.save_data_bool = False
+        self.log_max_lines = int(log_max_lines)
+        self._log_lines = deque(maxlen=self.log_max_lines)
         
         self.widgets["save_data"] = widgets.Checkbox(value=False, description='Salva dati su file', disabled=False, indent=False)
         self.widgets["save_data"].observe(lambda change: setattr(self, "save_data_bool", change['new']), names='value')
 
         self.output = widgets.Output()
+    
+    def _log(self, message):
+        """Scrive un messaggio in output mantenendo solo le ultime N righe."""
+        if message is None:
+            return
+        
+        text = str(message)
+        lines = text.splitlines() if text else [""]
+        for line in lines:
+            self._log_lines.append(line)
+        
+        with self.output:
+            self.output.clear_output(wait=True)
+            #print("\n".join(self._log_lines))
+            self.output.append_stdout("\n".join(self._log_lines) + "\n")
     
     def _init_plot(self, suptitle, ncols, nrows, plot_types, plot_titles=None, xlabels=None, ylabels=None):
         """Inizializza figura, assi e artist in base alla configurazione.
@@ -138,13 +156,13 @@ class BaseInterface:
 class BilanciaInterface(BaseInterface):
     """Interfaccia widget per acquisizione live da microbilancia."""
 
-    def __init__(self, port=None, use_dummy=False):
+    def __init__(self, port=None, use_dummy=False, log_max_lines=10):
         """Costruisce UI, grafici e callback per la microbilancia.
 
         Args:
             port (str | None): Porta seriale preselezionata.
         """
-        super().__init__()
+        super().__init__(log_max_lines=log_max_lines)
 
         self.bilancia = None
         self.ports = list_ports.comports()
@@ -185,23 +203,20 @@ class BilanciaInterface(BaseInterface):
     def on_connect_btn(self):
         """Gestisce il click di connessione e avvia lettura continua."""
         if not self.use_dummy and self.selected_port is None:
-            with self.output:
-                print("Porta non selezionata")
-                return
+            self._log("Porta non selezionata")
+            return
         
         try:
             if self.use_dummy:
                 self.bilancia = DummyBilancia()
             else:
                 self.bilancia = Bilancia(self.selected_port)
-            with self.output:
-                if self.use_dummy:
-                    print("Connected to dummy bilancia")
-                else:
-                    print(f"Connected to bilancia on port {self.selected_port}")
+            if self.use_dummy:
+                self._log("Connected to dummy bilancia")
+            else:
+                self._log(f"Connected to bilancia on port {self.selected_port}")
         except Exception as e:
-            with self.output:
-                print(f"Failed to connect to bilancia: {e}")
+            self._log(f"Failed to connect to bilancia: {e}")
             self.bilancia = None
             return
         
@@ -214,11 +229,9 @@ class BilanciaInterface(BaseInterface):
             self.bilancia.stop_continuous_read()
             self.bilancia.close()
             self.bilancia = None
-            with self.output:
-                print("Bilancia disconnected.")
+            self._log("Bilancia disconnected.")
         else:
-            with self.output:
-                print("No bilancia to disconnect.")
+            self._log("No bilancia to disconnect.")
 
         self._stop_update_plot()
         self.t0 = None
@@ -228,9 +241,8 @@ class BilanciaInterface(BaseInterface):
         global save_dir_name
         
         if self.bilancia is None:
-            with self.output:
-                print("No bilancia connected.")
-                self._stop_update_plot()
+            self._log("No bilancia connected.")
+            self._stop_update_plot()
             return
         
         data = self.bilancia.get_latest_data()
@@ -253,8 +265,7 @@ class BilanciaInterface(BaseInterface):
                 self.t0 = timestamp
             
             t_rel = timestamp - self.t0
-            with self.output:
-                print(t_rel)
+            self._log(t_rel)
 
             self.thickness_data.append(spessore)
             self.rate_data.append(r)
@@ -278,15 +289,14 @@ class BilanciaInterface(BaseInterface):
         
         except Exception as e:
             # Scarta campione corrotto, non uccidere l'update loop
-            with self.output:
-                print("Dati corrotti ricevuti, scartando campione")
-                print(e)
+            self._log("Dati corrotti ricevuti, scartando campione")
+            self._log(e)
             return
 
 class ElectrometerInterface(BaseInterface):
     
-    def __init__(self, port=None, use_dummy=False, expected_current_order=-9):
-        super().__init__()
+    def __init__(self, port=None, use_dummy=False, expected_current_order=-9, log_max_lines=10):
+        super().__init__(log_max_lines=log_max_lines)
 
         self.keithley = None
         self.ports = list_ports.comports()
@@ -313,12 +323,12 @@ class ElectrometerInterface(BaseInterface):
 
         self._init_plot(
             suptitle="Keithley Interface",
-            ncols=1,
+            ncols=2,
             nrows=1,
-            plot_types=[['line']],
-            plot_titles=[['Resistance vs Time']],
-            ylabels=[['Resistance']],
-            xlabels=[['Time']]
+            plot_types=[['line', 'line']],
+            plot_titles=[['Current vs Time', 'Resistance vs Time']],
+            ylabels=[['Current (A)', 'Resistance']],
+            xlabels=[['Time', 'Time']]
         )
 
         self.widgets["connect_btn"].on_click(lambda _: self.on_connect_btn())
@@ -336,32 +346,25 @@ class ElectrometerInterface(BaseInterface):
         if self.keithley is not None:
             try:
                 self.keithley.set_source_voltage(new_value)
-                with self.output:
-                    print(f"Source voltage set to {new_value} V.")
+                self._log(f"Source voltage set to {new_value} V.")
             except Exception as e:
-                with self.output:
-                    print(f"Failed to set source voltage: {e}")
+                self._log(f"Failed to set source voltage: {e}")
         else:
-            with self.output:
-                print("No Keithley connected. Cannot set source voltage.")
+            self._log("No Keithley connected. Cannot set source voltage.")
 
     def on_enable_output_change(self, new_value):
         if self.keithley is not None:
             try:
                 if new_value:
                     self.keithley.set_output(True)
-                    with self.output:
-                        print("Voltage source activated.")
+                    self._log("Voltage source activated.")
                 else:
                     self.keithley.set_output(False)
-                    with self.output:
-                        print("Voltage source deactivated.")
+                    self._log("Voltage source deactivated.")
             except Exception as e:
-                with self.output:
-                    print(f"Failed to change output state: {e}")
+                self._log(f"Failed to change output state: {e}")
         else:
-            with self.output:
-                print("No Keithley connected. Cannot change output state.")
+            self._log("No Keithley connected. Cannot change output state.")
         
     def show(self):
         display(self.output)
@@ -372,23 +375,20 @@ class ElectrometerInterface(BaseInterface):
         
     def on_connect_btn(self):
         if not self.use_dummy and self.selected_port is None:
-            with self.output:
-                print("Porta non selezionata")
-                return
+            self._log("Porta non selezionata")
+            return
         
         try:
             if self.use_dummy:
                 self.keithley = DummyElettrometroKeithley()
             else:
                 self.keithley = ElettrometroKeithley(self.selected_port)
-            with self.output:
-                if self.use_dummy:
-                    print("Connected to dummy Keithley")
-                else:
-                    print(f"Connected to Keithley on port {self.selected_port}")
+            if self.use_dummy:
+                self._log("Connected to dummy Keithley")
+            else:
+                self._log(f"Connected to Keithley on port {self.selected_port}")
         except Exception as e:
-            with self.output:
-                print(f"Failed to connect to Keithley: {e}")
+            self._log(f"Failed to connect to Keithley: {e}")
             self.keithley = None
             return
         
@@ -403,11 +403,9 @@ class ElectrometerInterface(BaseInterface):
                 self.keithley = None
                 self.resistance_data.clear()
                 self.time_data.clear()
-                with self.output:
-                    print("Keithley disconnected.")
+                self._log("Keithley disconnected.")
             else:
-                with self.output:
-                    print("No Keithley to disconnect.")
+                self._log("No Keithley to disconnect.")
 
             self._stop_update_plot()
             self.t0 = None
@@ -456,9 +454,8 @@ class ElectrometerInterface(BaseInterface):
         global save_dir_name
         
         if self.keithley is None:
-            with self.output:
-                print("No Keithley connected.")
-                self._stop_update_plot()
+            self._log("No Keithley connected.")
+            self._stop_update_plot()
             return
         
         voltage = self.widgets["set_source:voltage"].value
@@ -476,7 +473,7 @@ class ElectrometerInterface(BaseInterface):
             self._update_current_order(readings)
             
             if not readings:
-                self.output.append_stdout("No valid readings obtained from Keithley.\n")
+                self._log("No valid readings obtained from Keithley.")
                 return
             
             currents, times, ranges = zip(*readings)
@@ -494,7 +491,7 @@ class ElectrometerInterface(BaseInterface):
                             f.write(f"{curr}\t{t}\t{r}\n")
                 else:
                     for curr, t, r in zip(currents, times, ranges):
-                        self.output.append_stdout(f"{curr}\t{t}\t{r}\n")
+                        self._log(f"{curr}\t{t}\t{r}")
 
             # Gestione del tempo relativo (t0)
             if self.t0 is None:
@@ -503,21 +500,22 @@ class ElectrometerInterface(BaseInterface):
             # Creiamo una lista temporanea con il tempo sottratto al t0 per far partire il grafico da zero
             rel_time = [t - self.t0 for t in self.time_data]
                 
-            self.artists[0, 0].set_data(rel_time, self.resistance_data)
+            self.artists[0, 0].set_data(rel_time, self.current_data)
+            self.artists[0, 1].set_data(rel_time, self.resistance_data)
 
             self.axes[0, 0].relim()
             self.axes[0, 0].autoscale_view()
+            self.axes[0, 1].relim()
+            self.axes[0, 1].autoscale_view()
                 
             if len(self.time_data) > 100000:
                 self.time_data.pop(0)
+                self.current_data.pop(0)
                 self.resistance_data.pop(0)
+                if self.range_data:
+                    self.range_data.pop(0)
 
             self.fig.canvas.draw_idle()
         
-            # se l'output supera una certa lunghezza, svuotalo per evitare di intasare la console
-            if len(self.output.outputs) > 100:
-                self.output.clear_output()
-        
-            
         except Exception as e:
-            self.output.append_stdout(f"Error processing Keithley data: {e}\n")
+            self._log(f"Error processing Keithley data: {e}")
