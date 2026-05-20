@@ -5,7 +5,7 @@ cd /d "%~dp0"
 :: ==========================================
 :: CONFIGURAZIONE UTENTE
 :: ==========================================
-set CONDA_ENV_NAME=nome_del_tuo_ambiente_conda
+set CONDA_ENV_NAME=lab_materia_2
 set NOTEBOOK_NAME=interfaces/final_interfaces.ipynb
 :: ==========================================
 
