@@ -8,3 +8,4 @@ pyvisa
 ipykernel
 ipympl
 setuptools
+voila

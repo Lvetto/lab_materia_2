@@ -9,8 +9,9 @@ set "CONDA_ENV=lab_materia_2"
 where conda >nul 2>&1
 if %errorlevel%==0 (
     echo Conda rilevato. Uso ambiente "%CONDA_ENV%".
-    conda run -n "%CONDA_ENV%" python --version >nul 2>&1
+    conda env list | findstr /i /c:"%CONDA_ENV%" >nul 2>&1
     if not %errorlevel%==0 (
+        echo Creo ambiente conda "%CONDA_ENV%".
         conda create -y -n "%CONDA_ENV%" python
     )
     conda run -n "%CONDA_ENV%" python -m pip install --upgrade pip

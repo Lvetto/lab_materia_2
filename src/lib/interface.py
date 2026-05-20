@@ -13,6 +13,9 @@ from serial.tools import list_ports
 from collections import deque
 from lib.drivers import *
 from IPython.display import display
+from math import sqrt
+import matplotlib.patches as pa
+import time
 
 class BaseInterface:
     """Classe base per interfacce strumentali con widget e grafici live."""
@@ -519,3 +522,205 @@ class ElectrometerInterface(BaseInterface):
         
         except Exception as e:
             self._log(f"Error processing Keithley data: {e}")
+
+
+class CameraInterface(BaseInterface):
+    def __init__(self, camera_index=0):
+        super().__init__()
+
+        self.frames = []
+        self.reference_image = None
+
+        self.roi_center = (350, 250)
+        self.roi_radius = 50
+        self.roi_patch = None
+
+        self.camera = None
+
+        self.means = []
+
+        self.camera_index = camera_index
+
+        self.widgets["start_btn"] = widgets.Button(description="Start Camera")
+        self.widgets["stop_btn"] = widgets.Button(description="Stop Camera")
+        self.widgets["reset_means_btn"] = widgets.Button(description="Reset Means")
+        self.widgets["camera_select"] = widgets.Dropdown(options=range(10), description="Camera:")
+
+        # widgets per impostare i coefficienti del fit lineare
+        self.widgets["deg0_in"] = widgets.FloatText(value=0.0, description='intercetta:')
+        self.widgets["deg1_in"] = widgets.FloatText(value=1.0, description='pendenza:')       
+
+        self._init_plot(
+            suptitle="Camera Interface",
+            ncols=2,
+            nrows=2,
+            plot_types=[['image', "image"], ["image", "line"]],
+            plot_titles=[['Live camera', 'Differences'], ['Roi differences', "Difference means plot"]],
+        )
+
+        self.widgets["start_btn"].on_click(lambda _: self.on_start_btn())
+        self.widgets["stop_btn"].on_click(lambda _: self.on_stop_btn())
+        self.widgets["reset_means_btn"].on_click(lambda _: self.on_reset_means_btn())
+        self.widgets["camera_select"].observe(lambda change: setattr(self, "camera_index", change['new']), names='value')
+        
+        
+        self.fig.canvas.mpl_connect('button_press_event', self.on_roi_click)
+
+        self.show()
+
+    def show(self):
+        display(self.output)
+        display(widgets.HBox([self.widgets["start_btn"], self.widgets["stop_btn"], self.widgets["reset_means_btn"], self.widgets["camera_select"], self.widgets["save_data"], self.widgets["deg0_in"], self.widgets["deg1_in"]]))
+        display(self.fig.canvas)   
+             
+    def connect_camera(self):
+        try:
+            self.camera = Camera(self.camera_index, keep_frames=1)
+            if self.camera.cap.isOpened():
+                with self.output:
+                    print("Camera connessa con successo!")
+            else:
+                with self.output:
+                    print("Impossibile aprire la camera.")
+                raise Exception("Camera non aperta")
+        
+        except Exception as e:
+            with self.output:
+                print(f"Errore durante la connessione alla camera: {e}")
+            
+            self.camera = None
+            return
+    
+    def on_reset_means_btn(self):
+        self.means.clear()
+        with self.output:
+            print("Means reset.")
+
+    def on_start_btn(self):
+        with self.output:
+            print("Starting camera...")
+            
+        self.connect_camera()
+        self.camera._acquire_reference_image()
+        self.reference_image = self.camera.im0
+        self.camera.start_acquisition(center_x=320, center_y=240, radius=100, interval=0.1)
+
+        self.camera.update_roi(self.roi_center[0], self.roi_center[1], self.roi_radius)
+
+        self._start_update_plot(interval=50)
+
+
+        # forse meglio annche svuotare i frame
+
+    def on_stop_btn(self):
+        if self.camera is not None:
+            self.camera.stop_acquisition()
+            self.camera.release()
+            self.camera = None
+            with self.output:
+                print("Camera stopped.")
+        else:
+            with self.output:
+                print("No camera to stop.")
+        
+        if self.update_timer is not None:
+            self._stop_update_plot()
+    
+    def on_roi_click(self, event):
+        if event.inaxes != self.axes[0, 0]:
+            return
+        
+        # se tasto sinistro, cambia il centro
+        if event.button == 1:
+            self.roi_center = (int(event.xdata), int(event.ydata))
+        
+        # se tasto destro, cambia il raggio
+        elif event.button == 3:
+            dx = event.xdata - self.roi_center[0]
+            dy = event.ydata - self.roi_center[1]
+            self.roi_radius = int(sqrt(dx**2 + dy**2))
+        
+        self.camera.update_roi(self.roi_center[0], self.roi_center[1], self.roi_radius)
+
+    def _update_plot(self):
+        global save_dir_name
+
+        if self.camera is None:
+            return
+    
+        sample = self.camera.get_latest_image()
+
+        data, ts = sample
+
+        frame = data[0]
+        roi = data[1]
+
+        self.camera.images.clear()  # Pulisce il buffer delle immagini dopo aver preso l'ultima
+        self.camera.timestamps.clear()  # Pulisce il buffer dei timestamp
+
+        if frame is not None:
+            # il primo plot è l'immagine in tempo reale su cui impostiamo anche la roi
+            #self.axes[0, 0].imshow(frame, cmap='gray')
+            self.artists[0, 0].set_data(frame)
+            self.artists[0, 0].set_clim(np.min(frame), np.max(frame))
+            self.artists[0, 0].set_extent((0, frame.shape[1], frame.shape[0], 0)) 
+
+            if self.roi_center is not None and self.roi_radius is not None:
+                if self.roi_patch is not None:
+                    self.roi_patch.remove()
+                self.roi_patch = pa.Circle(self.roi_center, self.roi_radius, edgecolor='red', facecolor='none')
+                self.axes[0, 0].add_patch(self.roi_patch)
+
+            self.frames.append(frame)
+            
+            if self.save_data_bool:
+                timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+                image_filename = f"{save_dir_name}/images/frame_{timestamp_str}.png"
+                plt.imsave(image_filename, frame, cmap="gray")
+
+            if len(self.frames) > 10:
+                self.frames.pop(0)
+
+            # il secondo plot è la differenza tra reference_image e la media delle ultime 10 immagini
+            avg_frame = np.mean(self.frames, axis=0)
+            diff = np.abs(self.reference_image - avg_frame)
+            #self.axes[0, 1].imshow(diff, cmap='gray')
+            self.artists[0, 1].set_data(diff)
+            self.artists[0, 1].set_clim(np.min(diff), np.max(diff))
+            self.artists[0, 1].set_extent((0, diff.shape[1], diff.shape[0], 0))
+
+            # il terzo è la differenza tra reference_image e la media delle ultime 10 immagini limitatamente alla roi
+            roi_mask = self.camera.masks["total"]
+            roi_diff = diff * roi_mask
+            self.means.append(np.mean(roi_diff[roi_mask > 0]))
+            cx, cy = self.roi_center  # cx=x, cy=y
+            h, w = frame.shape
+            xmin = max(0, int(cx - self.roi_radius))
+            xmax = min(w, int(cx + self.roi_radius))
+            ymin = max(0, int(cy - self.roi_radius))
+            ymax = min(h, int(cy + self.roi_radius))
+
+            crop = roi_diff[ymin:ymax, xmin:xmax]          # note: rows=y, cols=x
+            self.artists[1,0].set_data(crop)
+            # set_extent: (left, right, bottom, top); for origin='upper' bottom should be ymax, top ymin
+            self.artists[1,0].set_extent((xmin, xmax, ymax, ymin))
+            self.artists[1,0].set_clim(np.min(crop), np.max(crop))
+            # il quarto è l'andamento delle medie delle differenze
+            if len(self.means) > 1:
+
+                x = list(range(len(self.means)))
+
+                if self.widgets["deg0_in"].value == 0 and self.widgets["deg1_in"].value == 0:
+                    #y = self.means / np.max(self.means)  # normalizza le medie per renderle più visibili
+                    y = self.means
+                else:
+                    deg0 = self.widgets["deg0_in"].value
+                    deg1 = self.widgets["deg1_in"].value
+                    y = deg0 + deg1 * np.array(self.means)
+
+                self.artists[1, 1].set_data(x, y)
+                self.axes[1, 1].relim()
+                self.axes[1, 1].autoscale_view()
+
+        self.fig.canvas.draw_idle()
+

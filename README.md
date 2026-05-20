@@ -52,4 +52,11 @@ bash install_scripts/install_linux.sh
 install_scripts\install_windows.bat
 ```
 
-Su Windows, se `conda` è disponibile viene usato l'ambiente `lab_materia_2`; altrimenti viene creato `.venv` locale.
+Su Windows, se `conda` è disponibile viene usato l'ambiente `lab_materia_2`; altrimenti viene creato.
+
+## Avvio interfacce
+
+Le interfacce sono notebook Jupyter. Possono essere avviate da jupyter, jupyterlab o vscode. 
+
+Sono inclusi anche script per avviare le interfacce direttamente in localhost (usando `voila`), senza mostrare il codice (`run_localhost.sh/.bat` per linux/windows). In questo caso, l'output del terminale mostrerà l'URL locale (es. `http://localhost:8866/`) da aprire nel browser (ctrl+click su vscode).
+Nota: in questo caso è possibile che i dati vengano salvati in `interfaces/data/` invece che in `data/`, in base alla configurazione del sistema.
