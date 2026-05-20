@@ -285,21 +285,20 @@ class BilanciaInterface(BaseInterface):
 
 class ElectrometerInterface(BaseInterface):
     
-    def __init__(self, port=None, use_dummy=False):
+    def __init__(self, port=None, use_dummy=False, expected_current_order=-9):
         super().__init__()
 
         self.keithley = None
         self.ports = list_ports.comports()
         self.selected_port = port
         self.use_dummy = use_dummy
+        self.expected_current_order = int(expected_current_order)
         self.t0 = None
 
         self.resistance_data = []
         self.current_data = []
         self.time_data = []
         self.range_data = []
-        
-        self.counter = 0
 
         self.widgets["connect_btn"] = widgets.Button(description="Connect Keithley")
         self.widgets["disconnect_btn"] = widgets.Button(description="Disconnect Keithley")
@@ -309,14 +308,6 @@ class ElectrometerInterface(BaseInterface):
 
         self.widgets["set_source:voltage"] = widgets.FloatSlider(value=0.1, min=0, max=10, step=0.1, description='Source Voltage (V):')
         self.widgets["set_source:voltage"].observe(lambda change: self.on_set_source_voltage_change(change['new']), names='value')
-
-        self.widgets["set_current_range"] = widgets.IntSlider(min=-9, max=1, step=1, description="Current range (log10 A):")
-        self.widgets["set_current_range"].observe(lambda change: self.on_set_current_range_change(change['new']), names='value')
-
-        self.widgets["set_current_range"].disabled = True  # disabilitato di default perché autorange è abilitato di default
-
-        self.widgets["set_autorange"] = widgets.Checkbox(value=True, description='Enable autorange', disabled=False, indent=False)
-        self.widgets["set_autorange"].observe(lambda change: self.on_set_autorange_change(change['new']), names='value')
         
         self.widgets["empty_data_plot"] = widgets.Button(description="Empty data plot")
 
@@ -341,36 +332,6 @@ class ElectrometerInterface(BaseInterface):
 
         self.show()
     
-    def on_set_autorange_change(self, new_value):
-        if self.keithley is not None:
-            try:
-                self.keithley.set_autorange(func="CURR:DC", state=new_value)
-                
-                self.widgets["set_current_range"].disabled = new_value  # disabilita il controllo del range se autorange è abilitato
-
-                with self.output:
-                    print(f"Autorange {'enabled' if new_value else 'disabled'}.")
-            except Exception as e:
-                with self.output:
-                    print(f"Failed to set autorange: {e}")
-        else:
-            with self.output:
-                print("No Keithley connected. Cannot set autorange.")
-
-    def on_set_current_range_change(self, new_value):
-        if self.keithley is not None:
-            try:
-                range_value = 10 ** new_value
-                self.keithley.set_manual_range("CURR:DC", range_value)
-                with self.output:
-                    print(f"Current range set to {range_value} A.")
-            except Exception as e:
-                with self.output:
-                    print(f"Failed to set current range: {e}")
-        else:
-            with self.output:
-                print("No Keithley connected. Cannot set current range.")
-
     def on_set_source_voltage_change(self, new_value):
         if self.keithley is not None:
             try:
@@ -408,7 +369,6 @@ class ElectrometerInterface(BaseInterface):
         display(self.fig.canvas)
         # another hbox below the fig for instrument settings (e.g. voltage source on/off)
         display(widgets.HBox([self.widgets["set_source:voltage"], self.widgets["enable_output"]]))
-        display(widgets.HBox([self.widgets["set_current_range"], self.widgets["set_autorange"]]))
         
     def on_connect_btn(self):
         if not self.use_dummy and self.selected_port is None:
@@ -432,18 +392,13 @@ class ElectrometerInterface(BaseInterface):
             self.keithley = None
             return
         
-        self.counter = 0
         self.keithley.identify()
         #self.keithley.set_source_voltage(1)
         self.keithley.init_current_reading()
-        self.keithley.start_continuous_read()
-        time.sleep(0.1)
-        self.keithley.set_autorange(func="CURR:DC", state=True)
         self._start_update_plot(interval=100)
         
     def on_disconnect_btn(self):
             if self.keithley is not None:
-                self.keithley.stop_continuous_read()
                 self.keithley.close()
                 self.keithley = None
                 self.resistance_data.clear()
@@ -463,6 +418,40 @@ class ElectrometerInterface(BaseInterface):
         self.time_data = []
         self.range_data = []
 
+    def _read_current_sample(self, range_order=None, autorange=False):
+        if self.keithley is None:
+            return None
+        
+        if autorange:
+            self.keithley.set_autorange(func="CURR:DC", state=True)
+            range_label = "Auto"
+        else:
+            if range_order is None:
+                return None
+            range_value = 10 ** range_order
+            self.keithley.set_autorange(func="CURR:DC", state=False)
+            self.keithley.set_manual_range("CURR:DC", range_value)
+            range_label = range_value
+        
+        raw = self.keithley.read()
+        parsed = self.keithley.parse_reading(raw, types=(float, float), units=False)
+        if parsed is None:
+            return None
+        
+        current, timestamp = parsed
+        return current, timestamp, range_label
+
+    def _update_current_order(self, readings):
+        if not readings:
+            return
+        
+        currents, _, ranges = zip(*readings)
+        
+        mean_current = np.mean(currents)
+
+        order_of_magnitude = int(np.floor(np.log10(abs(mean_current)))) if mean_current != 0 else 0
+        self.expected_current_order = order_of_magnitude
+
     def _update_plot(self):
         global save_dir_name
         
@@ -471,66 +460,42 @@ class ElectrometerInterface(BaseInterface):
                 print("No Keithley connected.")
                 self._stop_update_plot()
             return
-
-        # copia l'intero buffer      
-        currents = list(self.keithley.read_buffer)
-        times = list(self.keithley.time_buffer)
-        ranges = list(self.keithley.range_buffer)
-        
-        # elimina i None (dati corrotti) e sincronizza le due liste
-        clean_data = [(i, t, r) for i, t, r in zip(currents, times, ranges) if i is not None and t is not None]
-        if not clean_data:
-            with self.output:
-                print("No valid data received from Keithley.")
-            return
         
         voltage = self.widgets["set_source:voltage"].value
 
-        currents, times, ranges = zip(*clean_data)
-        self.resistance_data.extend(voltage / np.array(currents))  # converte corrente in resistenza
-        self.time_data.extend(times)
-        self.range_data.extend(ranges)
-        
-        self.counter += 1
-        
-        if len(self.current_data) > 0:
-            #curr_val = self.current_data[-1]
-            curr_val = np.median(self.current_data[-3:])
-            current_mag_ord = np.floor(np.log10(curr_val))
-            
-            scale1 = 2 * 10 ** (current_mag_ord + 1)
-            scale2 = 2 * 10 ** (current_mag_ord + 2)
-            scales = [scale1, scale2]
-            
-            with self.output:
-                print(f"Current: {curr_val:.2e} A, setting manual range to {scales[self.counter % 2]:.2e} A" if not self.widgets["set_autorange"].value else f"Current: {curr_val:.2e} A, autorange enabled")
-
-            if self.counter % 3 == 0:
-                self.keithley.set_autorange(func="CURR:DC", state=True)
-            else:
-                self.keithley.set_autorange(func="CURR:DC", state=False)
-                self.keithley.set_manual_range("CURR:DC", scales[self.counter % 2])
-            
-            if self.counter > 10000:
-                self.counter = 0
-        
-        # svuota i buffer
-        self.keithley.read_buffer = deque()
-        self.keithley.time_buffer = deque()
-        self.keithley.range_buffer = deque()
-
-        if not self.time_data or not self.resistance_data:
-            with self.output:
-                print("No valid data received from Keithley.")
-            return
-        
-        if self.save_data_bool:
-            data_filename = f"{save_dir_name}/data/points_keithley.txt"
-            with open(data_filename, "a") as f:
-                for res, t, r in zip(voltage / np.array(currents), times, ranges):
-                    f.write(f"{res}\t{t}\t{r}\n")
-
         try:
+
+            base_order = self.expected_current_order + 1  # lo strumento vuole il massimo valore atteso, quindi partiamo da un ordine di grandezza sopra quello medio delle misure
+            readings = [
+                self._read_current_sample(range_order=base_order, autorange=False),
+                self._read_current_sample(range_order=base_order + 1, autorange=False),
+                self._read_current_sample(autorange=True),
+            ]
+            readings = [reading for reading in readings if reading is not None]
+
+            self._update_current_order(readings)
+            
+            if not readings:
+                self.output.append_stdout("No valid readings obtained from Keithley.\n")
+                return
+            
+            currents, times, ranges = zip(*readings)
+            self.current_data.extend(currents)
+            self.resistance_data.extend(voltage / np.array(currents))  # converte corrente in resistenza
+            self.time_data.extend(times)
+            self.range_data.extend(ranges)
+            
+            if self.save_data_bool:
+
+                if not self.use_dummy:
+                    data_filename = f"{save_dir_name}/data/points_keithley.txt"
+                    with open(data_filename, "a") as f:
+                        for curr, t, r in zip(currents, times, ranges):
+                            f.write(f"{curr}\t{t}\t{r}\n")
+                else:
+                    for curr, t, r in zip(currents, times, ranges):
+                        self.output.append_stdout(f"{curr}\t{t}\t{r}\n")
+
             # Gestione del tempo relativo (t0)
             if self.t0 is None:
                 self.t0 = self.time_data[0]
@@ -548,7 +513,11 @@ class ElectrometerInterface(BaseInterface):
                 self.resistance_data.pop(0)
 
             self.fig.canvas.draw_idle()
+        
+            # se l'output supera una certa lunghezza, svuotalo per evitare di intasare la console
+            if len(self.output.outputs) > 100:
+                self.output.clear_output()
+        
             
         except Exception as e:
-            with self.output:
-                print(f"Errore durante l'aggiornamento del plot: {e}")
+            self.output.append_stdout(f"Error processing Keithley data: {e}\n")

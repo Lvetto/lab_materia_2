@@ -737,6 +737,8 @@ class ElettrometroKeithley(SCPIInstrument):
         self.reading = False
 
         self.reading_func = None
+        self._autorange_state = {"CURR:DC": True, "RES": True, "VOLT:DC": True}
+        self._manual_ranges = {}
         self._range = None
     
     def _build_command(self, command, args):
@@ -827,9 +829,9 @@ class ElettrometroKeithley(SCPIInstrument):
             print(f"Errore nella conversione della risposta del livello di tensione: '{response}'")
             return None
 
-    def read(self):
+    def read(self, delay=0.1):
         """Invia READ? e restituisce la stringa grezza"""
-        return self.query("READ?") #query usa readline()
+        return self.query("READ?", delay=delay) #query usa readline()
 
     # -- metodi per interpretare i dati --
 
@@ -1382,4 +1384,3 @@ class Camera:
 Bilancia.__doc__ = _load_protocol_doc("bilancia_maxtek.md")
 SCPIInstrument.__doc__ = _load_protocol_doc("scpi_base.md")
 ElettrometroKeithley.__doc__ = _load_protocol_doc("keithley_6517a.md")
-
