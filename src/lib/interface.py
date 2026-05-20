@@ -342,6 +342,8 @@ class ElectrometerInterface(BaseInterface):
         
         self.widgets["output"] = widgets.Output()
         self.output = self.widgets["output"]
+        
+        self.counter = 0
 
         self.show()
     
@@ -398,7 +400,8 @@ class ElectrometerInterface(BaseInterface):
         self.keithley.identify()
         #self.keithley.set_source_voltage(1)
         self.keithley.init_current_reading()
-        self._start_update_plot(interval=100)
+        self.counter = 0
+        self._start_update_plot(interval=50)
         
     def on_disconnect_btn(self):
             if self.keithley is not None:
@@ -473,11 +476,16 @@ class ElectrometerInterface(BaseInterface):
             ]
             readings = [reading for reading in readings if reading is not None]
 
-            self._update_current_order(readings)
             
             if not readings:
                 self._log("No valid readings obtained from Keithley.")
                 return
+            
+            if self.counter % 5 == 0:
+                self._update_current_order(readings)
+            
+            
+            self.counter += 1
             
             currents, times, ranges = zip(*readings)
             self.current_data.extend(currents)

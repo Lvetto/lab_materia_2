@@ -649,9 +649,9 @@ class SCPIInstrument:
             return
         complete_command = f"{command}{self.terminator}"
         self.serial.write(complete_command.encode('ascii'))
-        time.sleep(0.1)  # breve pausa per assicurarsi che il comando sia inviato prima di procedere
+        time.sleep(0.05)  # breve pausa per assicurarsi che il comando sia inviato prima di procedere
 
-    def query(self, command, delay=0.1):
+    def query(self, command, delay=0.05):
         """Sends a query and reads the instrument's response."""
         if self.serial is None:
             print("Query SCPI inviata a dispositivo dummy:", command)
