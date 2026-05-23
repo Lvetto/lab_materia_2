@@ -69,6 +69,22 @@ def image_timestamp_to_common(image_name_or_timestamp, fmt=FORMATO_COMUNE):
 
     raise ValueError("Formato timestamp immagine non riconosciuto")
 
+def keithley_timestamp_to_common(timestamp_unix, fmt=FORMATO_COMUNE):
+    """Converte timestamp da formato Keithley al formato comune.
+
+    Args:
+        timestamp_unix (float | int | str): Timestamp in secondi o millisecondi
+            dal Unix epoch.
+        fmt (str): Formato di output usato da ``time.strftime``.
+
+    Returns:
+        str: Timestamp normalizzato nel formato comune.
+    """
+    ts = float(timestamp_unix)
+    if ts > 1e12:  # il ts è in millisecondi
+        ts /= 1000.0 # lo converto in secondi perché le funzioni standard di Python (come time.localtime(ts)) si aspettano il tempo espresso in secondi
+    return time.strftime(fmt, time.localtime(ts))
+
 # caricamento dati dalle immagini
 
 base_img_folder = "data/raw"
@@ -127,8 +143,37 @@ def sort_images_and_timestamps(images, timestamps):
     sorted_timestamps, sorted_images = zip(*combined) #spacchetto le coppie di tuple in due liste separate ma ora ordinate cronologicamente
     return list(sorted_images), list(sorted_timestamps)
 
-
 # carica timestamp, rate, thickness dalla bilancia
+
+def load_keithley_data(file_path):
+    """Carica dati tabulati del Keithley da file di testo.
+
+    Ogni riga valida e attesa nel formato:
+    ``current<TAB>timestamp<TAB>range``.
+
+    Args:
+        file_path (str): Percorso del file dati.
+
+    Returns:
+        tuple[list[str], list[float], list[float], list[float]]: correnti, timestamp
+            normalizzati e range di misura.
+    """
+    timestamps = []
+    currents = []
+    ranges = []
+    with open(file_path, 'r') as f:
+        for line in f:
+            parts = line.strip().split('\t')
+            if len(parts) >= 3:
+                ts_common = keithley_timestamp_to_common(parts[1])
+                timestamps.append(ts_common)
+                currents.append(float(parts[0]))
+                range_val = parts[2].strip()
+                if range_val.lower() == "Auto":
+                    ranges.append(float(-1))
+    return timestamps, currents, ranges
+
+# carica corrente, tempo, range di misura dal keithley
 
 def load_bilancia_data(file_path):
     """Carica dati tabulati della microbilancia da file di testo.
