@@ -143,7 +143,7 @@ def sort_images_and_timestamps(images, timestamps):
     sorted_timestamps, sorted_images = zip(*combined) #spacchetto le coppie di tuple in due liste separate ma ora ordinate cronologicamente
     return list(sorted_images), list(sorted_timestamps)
 
-# carica timestamp, rate, thickness dalla bilancia
+# carica corrente, tempo, range di misura dal keithley
 
 def load_keithley_data(file_path):
     """Carica dati tabulati del Keithley da file di testo.
@@ -173,7 +173,10 @@ def load_keithley_data(file_path):
                     ranges.append(float(-1))
     return timestamps, currents, ranges
 
-# carica corrente, tempo, range di misura dal keithley
+def calculate_resistance(currents_arr, voltage=1.0):
+    return voltage / currents_arr
+
+# carica timestamp, rate, thickness dalla bilancia
 
 def load_bilancia_data(file_path):
     """Carica dati tabulati della microbilancia da file di testo.
@@ -521,6 +524,26 @@ def extract_line_profiles_circle(images, center, radius, num_profiles=10):
 
     return line_profiles
 
+# estraggo pendenza, intercetta ed errore da fit dei dati di spessore (interpolati sui tempi delle immagini) e dell'intesnità media in una immagine
+
+def lin_fit_with_error(x, y):
+    """
+    Esegue una regressione lineare sui dati (x, y) e restituisce i parametri della retta (slope, intercept) e l'errore standard.
+    """
+    slope, intercept = np.polyfit(x, y, 1)
+    predicted = slope * np.array(x) + intercept
+    residuals = np.array(y) - predicted
+    error = np.sqrt(np.sum(residuals**2) / (len(x) - 2))
+    return slope, intercept, error
+
+def linear_fit(window_size): # questa devo toglierla ma la lascio perché mi può servire come promemoria
+    sigma = window_size / 2
+    images_smooth = moving_average_images_gaussian_weights(images_cut, window_size, sigma)
+    mean_intensities = [np.mean(img) for img in images_smooth]
+
+    slope, intercept, error = lin_fit_with_error(mean_intensities, bilancia_rates_interp)
+
+    predicted_rates = slope * np.array(mean_intensities) + intercept
 
 class RoiSelectorWidget:
     """Widget interattivo per selezionare una ROI circolare su un'immagine."""
