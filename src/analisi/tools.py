@@ -69,6 +69,32 @@ def image_timestamp_to_common(image_name_or_timestamp, fmt=FORMATO_COMUNE):
 
     raise ValueError("Formato timestamp immagine non riconosciuto")
 
+def estrai_timestamp_unix_da_immagine(image_name_or_timestamp):
+    """
+    Estrae la data/ora dal nome file dell'immagine e la converte
+    in un timestamp Unix (float) per permettere l'allineamento matematico.
+    """
+    s = str(image_name_or_timestamp)
+    base = os.path.basename(s)
+
+    # Cerca il formato YYYYMMDD_HHMMSS
+    m1 = re.search(r"(\d{8}_\d{6})", base)
+    if m1:
+        # Estrae le componenti temporali
+        t = time.strptime(m1.group(1), "%Y%m%d_%H%M%S")
+        # time.mktime converte la data in Secondi Unix (float)
+        return time.mktime(t)
+
+    # Cerca il formato YYYY-MM-DD_HH-MM-SS
+    m2 = re.search(r"(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})", base)
+    if m2:
+        # Estrae le componenti temporali
+        t = time.strptime(m2.group(1), "%Y-%m-%d_%H-%M-%S")
+        # time.mktime converte la data in Secondi Unix (float)
+        return time.mktime(t)
+
+    raise ValueError(f"Formato timestamp non riconosciuto nel file: {base}")
+
 def keithley_timestamp_to_common(timestamp_unix, fmt=FORMATO_COMUNE):
     """Converte timestamp da formato Keithley al formato comune.
 
@@ -171,10 +197,72 @@ def load_keithley_data(file_path):
                 range_val = parts[2].strip()
                 if range_val.lower() == "Auto":
                     ranges.append(float(-1))
-    return timestamps, currents, ranges
+    return currents, timestamps, ranges
 
 def calculate_resistance(currents_arr, voltage=1.0):
     return voltage / currents_arr
+
+def separa_terzine_keithley(timestamps, currents, ranges):
+    """
+    Legge i dati a blocchi di 3 e li smista in base al range.
+    Ass assicura di separare sia le correnti che i rispettivi timestamp.
+    """
+    # Inizializziamo un dizionario con liste vuote per ogni categoria
+    separati = {
+        'auto': {'timestamps': [], 'currents': []},
+        'upper': {'timestamps': [], 'currents': []},
+        'lower': {'timestamps': [], 'currents': []}
+    }
+    
+    # Iteriamo saltando di 3 in 3
+    for i in range(0, len(ranges), 3):
+        # Estraiamo la "terzina" (chunk) corrente
+        t_chunk = timestamps[i:i+3]
+        c_chunk = currents[i:i+3]
+        r_chunk = ranges[i:i+3]
+        
+        # Controllo di sicurezza: se l'ultimo blocco non ha 3 elementi, lo saltiamo
+        if len(r_chunk) < 3:
+            print(f"Attenzione: trovati {len(r_chunk)} dati residui alla fine del file. Ignorati.")
+            break
+            
+        # 1. Troviamo l'indice del range Auto (-1)
+        try:
+            idx_auto = r_chunk.index(-1)
+        except ValueError:
+            # Se per qualche motivo manca il -1, saltiamo la terzina o gestiamo l'errore
+            print(f"Range 'Auto' (-1) non trovato alla terzina {i}. Dati della terzina ignorati.")
+            continue 
+            
+        # 2. Identifichiamo gli altri due indici
+        indici_rimanenti = [0, 1, 2]
+        indici_rimanenti.remove(idx_auto)
+        idx_A, idx_B = indici_rimanenti
+        
+        # 3. Confrontiamo i valori dei range rimanenti per capire chi è upper e chi lower
+        if r_chunk[idx_A] > r_chunk[idx_B]:
+            idx_upper = idx_A
+            idx_lower = idx_B
+        else:
+            idx_upper = idx_B
+            idx_lower = idx_A
+            
+        # 4. Smistiamo i dati nei rispettivi contenitori
+        separati['auto']['timestamps'].append(t_chunk[idx_auto])
+        separati['auto']['currents'].append(c_chunk[idx_auto])
+        
+        separati['upper']['timestamps'].append(t_chunk[idx_upper])
+        separati['upper']['currents'].append(c_chunk[idx_upper])
+        
+        separati['lower']['timestamps'].append(t_chunk[idx_lower])
+        separati['lower']['currents'].append(c_chunk[idx_lower])
+
+    # Convertiamo tutte le liste in array NumPy per comodità di analisi
+    for categoria in separati:
+        separati[categoria]['timestamps'] = np.array(separati[categoria]['timestamps'])
+        separati[categoria]['currents'] = np.array(separati[categoria]['currents'])
+        
+    return separati
 
 # carica timestamp, rate, thickness dalla bilancia
 
@@ -204,7 +292,8 @@ def load_bilancia_data(file_path):
                 timestamps.append(ts_common)
                 rates.append(float(parts[1]))
                 thicknesses.append(float(parts[2]))
-    return timestamps, rates, thicknesses
+    return timestamps, rates, thicknesses # i dati nel file sono salvati in ordine: tempo, spessore e rate 
+# rate e spessore sono salvati nell'array opposto (i.e. i dati di spessore (parts[1]) sono salvati in rates e viceversa )
 
 def extract_common_timestamp_points(image_timestamps, bilancia_timestamps, max_diff_seconds=1.0):
     """Trova coppie immagine-bilancia compatibili temporalmente.
@@ -523,27 +612,6 @@ def extract_line_profiles_circle(images, center, radius, num_profiles=10):
         line_profiles.append(profiles_for_image)
 
     return line_profiles
-
-# estraggo pendenza, intercetta ed errore da fit dei dati di spessore (interpolati sui tempi delle immagini) e dell'intesnità media in una immagine
-
-def lin_fit_with_error(x, y):
-    """
-    Esegue una regressione lineare sui dati (x, y) e restituisce i parametri della retta (slope, intercept) e l'errore standard.
-    """
-    slope, intercept = np.polyfit(x, y, 1)
-    predicted = slope * np.array(x) + intercept
-    residuals = np.array(y) - predicted
-    error = np.sqrt(np.sum(residuals**2) / (len(x) - 2))
-    return slope, intercept, error
-
-def linear_fit(window_size): # questa devo toglierla ma la lascio perché mi può servire come promemoria
-    sigma = window_size / 2
-    images_smooth = moving_average_images_gaussian_weights(images_cut, window_size, sigma)
-    mean_intensities = [np.mean(img) for img in images_smooth]
-
-    slope, intercept, error = lin_fit_with_error(mean_intensities, bilancia_rates_interp)
-
-    predicted_rates = slope * np.array(mean_intensities) + intercept
 
 class RoiSelectorWidget:
     """Widget interattivo per selezionare una ROI circolare su un'immagine."""
