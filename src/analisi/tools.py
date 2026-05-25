@@ -264,7 +264,7 @@ def load_bilancia_data(file_path):
             # strip() rimuove gli spazi bianchi e i caratteri invisibili
             # split('\t') divide la stringa in una lista di sottostringhe usando il tab come delimitatore
             if len(parts) >= 3:
-                ts_common = bilancia_timestamp_to_common(parts[0])
+                ts_common = (float(parts[0]))#bilancia_timestamp_to_common(parts[0])
                 timestamps.append(ts_common)
                 rates.append(float(parts[1]))
                 thicknesses.append(float(parts[2]))
