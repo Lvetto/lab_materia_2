@@ -191,12 +191,14 @@ def load_keithley_data(file_path):
         for line in f:
             parts = line.strip().split('\t')
             if len(parts) >= 3:
-                ts_common = keithley_timestamp_to_common(parts[1])
+                ts_common = float(parts[1])#keithley_timestamp_to_common(parts[1])
                 timestamps.append(ts_common)
                 currents.append(float(parts[0]))
                 range_val = parts[2].strip()
-                if range_val.lower() == "Auto":
+                if range_val.lower() == "auto":
                     ranges.append(float(-1))
+                else:
+                    ranges.append(float(range_val))
     return currents, timestamps, ranges
 
 def calculate_resistance(currents_arr, voltage=1.0):
@@ -288,8 +290,8 @@ def load_bilancia_data(file_path):
             # strip() rimuove gli spazi bianchi e i caratteri invisibili
             # split('\t') divide la stringa in una lista di sottostringhe usando il tab come delimitatore
             if len(parts) >= 3:
-                ts_common = bilancia_timestamp_to_common(parts[0])
-                timestamps.append(ts_common)
+                ts_common = parts[0]#bilancia_timestamp_to_common(parts[0])
+                timestamps.append(float(ts_common))
                 rates.append(float(parts[1]))
                 thicknesses.append(float(parts[2]))
     return timestamps, rates, thicknesses # i dati nel file sono salvati in ordine: tempo, spessore e rate 
