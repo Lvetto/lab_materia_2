@@ -205,7 +205,7 @@ def calculate_resistance(currents_arr, voltage=1.0):
 def separa_terzine_keithley(timestamps, currents, ranges):
     """
     Legge i dati a blocchi di 3 e li smista in base al range.
-    Ass assicura di separare sia le correnti che i rispettivi timestamp.
+    Assicura di separare sia le correnti che i rispettivi timestamp.
     """
     # Inizializziamo un dizionario con liste vuote per ogni categoria
     separati = {
