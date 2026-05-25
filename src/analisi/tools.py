@@ -69,32 +69,6 @@ def image_timestamp_to_common(image_name_or_timestamp, fmt=FORMATO_COMUNE):
 
     raise ValueError("Formato timestamp immagine non riconosciuto")
 
-def estrai_timestamp_unix_da_immagine(image_name_or_timestamp):
-    """
-    Estrae la data/ora dal nome file dell'immagine e la converte
-    in un timestamp Unix (float) per permettere l'allineamento matematico.
-    """
-    s = str(image_name_or_timestamp)
-    base = os.path.basename(s)
-
-    # Cerca il formato YYYYMMDD_HHMMSS
-    m1 = re.search(r"(\d{8}_\d{6})", base)
-    if m1:
-        # Estrae le componenti temporali
-        t = time.strptime(m1.group(1), "%Y%m%d_%H%M%S")
-        # time.mktime converte la data in Secondi Unix (float)
-        return time.mktime(t)
-
-    # Cerca il formato YYYY-MM-DD_HH-MM-SS
-    m2 = re.search(r"(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})", base)
-    if m2:
-        # Estrae le componenti temporali
-        t = time.strptime(m2.group(1), "%Y-%m-%d_%H-%M-%S")
-        # time.mktime converte la data in Secondi Unix (float)
-        return time.mktime(t)
-
-    raise ValueError(f"Formato timestamp non riconosciuto nel file: {base}")
-
 def keithley_timestamp_to_common(timestamp_unix, fmt=FORMATO_COMUNE):
     """Converte timestamp da formato Keithley al formato comune.
 
@@ -290,8 +264,8 @@ def load_bilancia_data(file_path):
             # strip() rimuove gli spazi bianchi e i caratteri invisibili
             # split('\t') divide la stringa in una lista di sottostringhe usando il tab come delimitatore
             if len(parts) >= 3:
-                ts_common = parts[0]#bilancia_timestamp_to_common(parts[0])
-                timestamps.append(float(ts_common))
+                ts_common = bilancia_timestamp_to_common(parts[0])
+                timestamps.append(ts_common)
                 rates.append(float(parts[1]))
                 thicknesses.append(float(parts[2]))
     return timestamps, rates, thicknesses # i dati nel file sono salvati in ordine: tempo, spessore e rate 
