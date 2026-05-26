@@ -223,7 +223,7 @@ class BilanciaInterface(BaseInterface):
             self.bilancia = None
             return
         
-        self.bilancia.start_continuous_read(data=["Sensor 1 rate", "Sensor 1 thickness"])
+        self.bilancia.start_continuous_read(data=["Sensor 1 rate", "Sensor 1 thickness"]) 
         self._start_update_plot(interval=100)
         
     def on_disconnect_btn(self):
