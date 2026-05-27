@@ -405,13 +405,17 @@ def extract_roi_from_images(images, roi_center, roi_radius):
     roi_images = []
 
     for img in images:
-        mask = np.zeros_like(img, dtype=np.uint8) #crea un foglio nero (matrice di 0 delle dimensioni dell'immagine)
-        cv2.circle(mask, roi_center, roi_radius, 255, -1) #crea un cerchio bianco sull'immagine nera
-        roi_img = cv2.bitwise_and(img, img, mask=mask)
+        mask = np.zeros_like(img) #crea un foglio nero (matrice di 0 delle dimensioni dell'immagine)
+        h, w = img.shape[:2]
+        Y, X = np.ogrid[:h, :w] #Y è una colonna che contiene tutti gli indici di riga, X è una riga che contiene tutti gli indici di colonna
+        dist_from_center = np.sqrt((X - roi_center[0])**2 + (Y - roi_center[1])**2) # non è un numero, ma una matrice della stessa dimensione della reference_image pari a h x w
+        roi_mask = dist_from_center <= roi_radius
+        #cv2.circle(mask, roi_center, roi_radius, 255, -1) #crea un cerchio bianco sull'immagine nera
+        #roi_img = cv2.bitwise_and(img, img, mask=mask)
         #L'operatore AND bit a bit confronta l'immagine originale con la maschera:
         # dove la maschera è bianca: l'immagine originale "passa" e rimane identica.
         # dove la maschera è nera: l'immagine originale viene cancellata e diventa nera
-        roi_images.append(roi_img)
+        roi_images.append(img * roi_mask)
 
     return roi_images
 
@@ -428,7 +432,7 @@ def compute_difference_from_reference(images, reference_image):
     difference_images = []
 
     for img in images:
-        diff_img = cv2.absdiff(img, reference_image)
+        diff_img = reference_image - img  #cv2.absdiff(img, reference_image)
         difference_images.append(diff_img)
 
     return difference_images

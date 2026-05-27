@@ -1244,7 +1244,7 @@ class Camera:
         frames = []
         for _ in range(avgs):
             frame = self.acquire_image()
-            frames.append(frame.astype(np.float32))
+            frames.append(frame)
             time.sleep(0.1) # Breve pausa per dare tempo al sensore
             
         if not frames:
@@ -1252,13 +1252,13 @@ class Camera:
         
         # frames è una lista di 16 immagini 2D 
            
-        self.im0 = np.mean(frames, axis=0).astype(np.uint8)
+        self.im0 = np.mean(frames, axis=0)
         # scegliendo axis=0 faccio la media su tutte le immagini, pixel per pixel
         
         # avg over the channels
         self.im0 = cv2.cvtColor(self.im0, cv2.COLOR_BGR2GRAY) if len(self.im0.shape) == 3 else self.im0
         
-        return self.im0.astype(np.uint8)
+        return self.im0
 
     def _process_frame(self, im0, masks):
         """Acquisisce un frame e ne estrae la ROI mascherata.
