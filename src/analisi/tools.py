@@ -653,3 +653,13 @@ class RoiSelectorWidget:
             tuple[tuple[int, int], int]: Centro ``(x, y)`` e raggio in pixel.
         """
         return self.roi_center, self.roi_radius
+
+def lin_fit_with_error(x, y):
+    """
+    Esegue una regressione lineare sui dati (x, y) e restituisce i parametri della retta (slope, intercept) e l'errore standard.
+    """
+    slope, intercept = np.polyfit(x, y, 1)
+    predicted = slope * np.array(x) + intercept
+    residuals = np.array(y) - predicted
+    error = np.sqrt(np.sum(residuals**2) / (len(x) - 2))
+    return slope, intercept, error
